@@ -32,7 +32,7 @@ class Config:
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'test4'   # environment to train on
+    env_name: str = 'map6'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
@@ -68,6 +68,7 @@ class Config:
 
     """ Network Parameters """
     noise: bool = False
-    sigma_init: float = 0.017
+    sigma_init: float = 0.02
     recurrent: bool = False
     hidden_size: int = 256
+    last_n: int = 0  # 0 for fully trained

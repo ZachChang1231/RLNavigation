@@ -29,14 +29,34 @@ class Policy(nn.Module):
         else:
             raise NotImplementedError
 
-        self.base = base(obs_shape[0], num_outputs, cfg)
-        self.soft_max = nn.Softmax(dim=1)
+        self.base = base(cfg)
         if not self.cfg.noise:
-            self.actor_linear = nn.Linear(cfg.hidden_size, num_outputs)
-            self.critic_linear = nn.Linear(cfg.hidden_size, 1)
+            self.actor_linear = nn.Sequential(
+                nn.Linear(cfg.hidden_size, cfg.hidden_size),
+                nn.ReLU(),
+                nn.Linear(cfg.hidden_size, num_outputs),
+                nn.Softmax(dim=1),
+            )
+            self.critic_linear = nn.Sequential(
+                nn.Linear(cfg.hidden_size, cfg.hidden_size),
+                nn.ReLU(),
+                nn.Linear(cfg.hidden_size, 1),
+            )
         else:
-            self.actor_linear = NoisyLinear(cfg.hidden_size, num_outputs, sigma_init=cfg.sigma_init)
-            self.critic_linear = NoisyLinear(cfg.hidden_size, 1)
+            self.actor_linear = nn.Sequential(
+                nn.Linear(cfg.hidden_size, cfg.hidden_size),
+                nn.ReLU(),
+                NoisyLinear(cfg.hidden_size, num_outputs, sigma_init=cfg.sigma_init),
+                nn.Softmax(dim=1),
+            )
+            self.critic_linear = nn.Sequential(
+                nn.Linear(cfg.hidden_size, cfg.hidden_size),
+                nn.ReLU(),
+                NoisyLinear(cfg.hidden_size, 1),
+            )
+        if cfg.last_n:
+            hold_list = ["actor_module", "critic_module"]
+            self._hold_parameter(hold_list)
 
         self.init()
         self.train()
@@ -44,20 +64,32 @@ class Policy(nn.Module):
     def forward(self, inputs, hns):
         x, hns = self.base(inputs, hns)
         value = self.critic_linear(x)
-        probs = self.soft_max(self.actor_linear(x))
+        probs = self.actor_linear(x)
         dist = Categorical(probs)
-
         return dist, value, hns
 
     def reset_noise(self):
         if self.cfg.noise:
-            self.actor_linear.reset_noise()
-            self.critic_linear.reset_noise()
+            for module in self.modules():
+                if "NoisyLinear" in str(module.__class__):
+                    module.reset_noise()
 
     def remove_noise(self):
         if self.cfg.noise:
-            self.actor_linear.remove_noise()
-            self.critic_linear.remove_noise()
+            for module in self.modules():
+                if "NoisyLinear" in str(module.__class__):
+                    module.remove_noise()
+
+    def _hold_parameter(self, hold_list):
+        for sequence in hold_list:
+            module_list = []
+            for name, para in self.named_parameters():
+                if sequence in name:
+                    module_list.append(name.split('.')[1])
+            module_list = sorted([int(layer) for layer in list(set(module_list))])[::-1]
+            for name, para in self.named_parameters():
+                if not "{}.{}".format(sequence, module_list[self.cfg.last_n - 1]) in name:
+                    para.requires_grad = False
 
     @property
     def is_recurrent(self):
@@ -85,14 +117,14 @@ class Policy(nn.Module):
 
 
 class NNBase(nn.Module):
-    def __init__(self, recurrent, recurrent_input_size, hidden_size):
+    def __init__(self, cfg):
         super(NNBase, self).__init__()
+        self.cfg = cfg
+        self._hidden_size = cfg.hidden_size
+        self._recurrent = cfg.recurrent
 
-        self._hidden_size = hidden_size
-        self._recurrent = recurrent
-
-        if recurrent:
-            self.gru = nn.GRU(recurrent_input_size, hidden_size)
+        if cfg.recurrent:  # TODO
+            self.gru = nn.GRU(cfg.hidden_size, cfg.hidden_size)
             for name, param in self.gru.named_parameters():
                 if 'bias' in name:
                     nn.init.constant_(param, 0)
@@ -125,63 +157,63 @@ class NNBase(nn.Module):
 
 
 class CNNBase(NNBase):
-    def __init__(self, num_inputs, num_outputs, recurrent=False, hidden_size=512):
-        super(CNNBase, self).__init__(recurrent, hidden_size, hidden_size)
+    def __init__(self, cfg):    # TODO
+        super(CNNBase, self).__init__(cfg)
 
         self.fc = nn.Sequential(
-            nn.Conv2d(num_inputs, 32, 8, stride=4),
+            nn.Conv2d(cfg.laser_num, 32, 8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, 4, stride=2),
             nn.ReLU(),
             nn.Conv2d(64, 32, 3, stride=1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(32 * 7 * 7, hidden_size),
+            nn.Linear(32 * 7 * 7, cfg.hidden_size),
             nn.ReLU()
         )
 
-        self.actor_linear = nn.Sequential(
-            nn.Linear(hidden_size, num_outputs),
-            nn.Softmax(dim=1)
-        )
-        self.critic_linear = nn.Sequential(
-            nn.Linear(hidden_size, 1)
-        )
-        self.init()
-
-        self.train()
-
     def forward(self, inputs, hn):
-        # TODO
         x = self.fc(inputs)
-
         if self.is_recurrent:
             x, hn = self._gru(x, hn)
 
-        value = self.critic_linear(x)
-        probs = self.actor_linear(x)
-        dist = Categorical(probs)
-
-        return dist, value, hn
+        return x, hn
 
 
 class MLPBase(NNBase):
-    def __init__(self, num_inputs, num_outputs, cfg):
-        super(MLPBase, self).__init__(cfg.recurrent, cfg.hidden_size, cfg.hidden_size)
-        hidden_size = cfg.hidden_size
-
-        self.fc = nn.Sequential(
-            nn.Linear(num_inputs, hidden_size),
+    def __init__(self, cfg):
+        super(MLPBase, self).__init__(cfg)
+        half_hidden_size = int(cfg.hidden_size / 2)
+        quad_hidden_size = int(cfg.hidden_size / 4)
+        self.fc_o = nn.Sequential(
+            nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
             nn.ReLU(),
-            # nn.Linear(hidden_size, hidden_size),
-            # nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
+            # nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
+            # nn.ReLU()
+        )
+        self.fc_d = nn.Sequential(
+            nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
+            nn.ReLU(),
+            # nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
+            # nn.ReLU()
+        )
+        self.fc_t = nn.Sequential(
+            nn.Linear(in_features=2, out_features=quad_hidden_size),
+            nn.ReLU(),
+            # nn.Linear(in_features=quad_hidden_size, out_features=quad_hidden_size),
+            # nn.ReLU()
+        )
+        self.fc_c = nn.Sequential(
+            nn.Linear(in_features=half_hidden_size * 2 + quad_hidden_size, out_features=cfg.hidden_size),
             nn.ReLU()
         )
 
     def forward(self, inputs, hns):
-        x = self.fc(inputs)
-        if self.is_recurrent:
+        obs_feature = self.fc_o(inputs[:, :self.cfg.laser_num])
+        delta_feature = self.fc_d(inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2] - inputs[:, :self.cfg.laser_num])
+        target_feature = self.fc_t(inputs[:, -2:])
+        x = self.fc_c(torch.cat((obs_feature, delta_feature, target_feature), dim=1))
+        if self.is_recurrent:  # TODO
             split_x = torch.split(x, 1, dim=0)
             x_list = []
             hns_list = []
@@ -209,10 +241,10 @@ class NoisyLinear(nn.Linear):
         self.bias_sigma = nn.Parameter(torch.FloatTensor(out_features))
         self.register_buffer('bias_epsilon', torch.FloatTensor(out_features))
 
-        self.reset_parameters()
+        self._reset_parameters()
         self.reset_noise()
 
-    def reset_parameters(self):
+    def _reset_parameters(self):
         mu_range = 1 / math.sqrt(self.weight_mu.size(1))
 
         self.weight_mu.data.uniform_(-mu_range, mu_range)

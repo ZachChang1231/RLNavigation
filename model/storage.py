@@ -11,6 +11,7 @@
 import numpy as np
 import torch
 from collections import deque
+from itertools import islice
 
 from config import config as cfg
 
@@ -58,12 +59,13 @@ class RolloutStorage(object):
 
 
 class DataWriter(object):
-    def __init__(self):
+    def __init__(self):  # TODO
+        self.max_len = 20000
         self.mapping = {
-            "total_reward": deque(maxlen=20000),
-            "eval_reward": deque(maxlen=20000),
-            "actor_loss": deque(maxlen=20000),
-            "critic_loss": deque(maxlen=20000)
+            "total_reward": deque(maxlen=self.max_len),
+            "eval_reward": deque(maxlen=self.max_len),
+            "actor_loss": deque(maxlen=self.max_len),
+            "critic_loss": deque(maxlen=self.max_len)
         }
         self.best_reward = 0
 
@@ -76,10 +78,13 @@ class DataWriter(object):
         return self.mapping
 
     def get_episode_loss(self, interval):
-        return np.mean(self.mapping["actor_loss"][-interval:]), np.mean(self.mapping["critic_loss"][-interval:])
+        length = len(self.mapping["actor_loss"])
+        return np.mean(list(islice(self.mapping["actor_loss"], length - interval, length))), \
+            np.mean(list(islice(self.mapping["critic_loss"], length - interval, length)))
 
     def get_episode_reward(self, interval):
-        reward = self.mapping["total_reward"][-interval*cfg.num_steps:]
+        length = len(self.mapping["total_reward"])
+        reward = list(islice(self.mapping["total_reward"], length - interval * cfg.num_steps, length))
         return np.mean(reward), np.median(reward), np.min(reward), np.max(reward)
 
 

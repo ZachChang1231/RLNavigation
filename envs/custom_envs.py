@@ -83,17 +83,18 @@ class CusEnv(gym.Env):
             "forward": 5
         }
 
-        self.observation_space = spaces.Box(np.array([0 for _ in range(cfg.laser_num + 2)], dtype=np.float32),
-                                            np.array([1 for _ in range(cfg.laser_num + 2)], dtype=np.float32))
+        self.observation_space = spaces.Box(np.array([0 for _ in range(cfg.laser_num * 2 + 2)], dtype=np.float32),
+                                            np.array([1 for _ in range(cfg.laser_num * 2 + 2)], dtype=np.float32))
 
         self.init_state_memory = None
         self.kwargs_memory = dict()
         self.reset_num_count = 0
         self.step_num = 0
 
-        self.state = {"laser_state": [], "laser_info": [], "target_state": [], "self_state": []}
+        self.state = {"pre_laser_state": [], "laser_state": [], "laser_info": [], "target_state": [], "self_state": []}
         """
         state = {
+            "pre_laser_state": [s0, s1, ..., sn]  (s in [0, 1], ds in [-1, 1]),
             "laser_state": [s0, s1, ..., sn]  (s in [0, 1], ds in [-1, 1]),
             "target_state": [distance, theta]  (distance in [0, 1], theta in [-1, 1]),
             "self_state": [vx, vy, px, py],
@@ -141,8 +142,7 @@ class CusEnv(gym.Env):
         laser_state, laser_info = self._get_laser_state(laser_array)
         distance, theta = self._get_target_info(trans=True)
 
-        pre_laser_state = copy.deepcopy(self.state["laser_state"])
-
+        self.state["pre_laser_state"] = copy.deepcopy(self.state["laser_state"])
         self.state["laser_state"] = laser_state
         self.state["laser_info"] = laser_info
         self.state["target_state"] = [distance, theta]
@@ -214,6 +214,7 @@ class CusEnv(gym.Env):
 
             distance, theta = self._get_target_info(trans=True)
 
+            self.state["pre_laser_state"] = [0 for _ in range(self.cfg.laser_num)]
             self.state["laser_state"] = laser_state
             self.state["laser_info"] = laser_info
             self.state["target_state"] = [distance, theta]
@@ -348,7 +349,7 @@ class CusEnv(gym.Env):
         if normalize:
             theta = (theta + np.pi) / np.pi  # [0, 1]
             distance = distance / self._get_distance([0, 0], self.map_info["shape"])  # [0, 1]
-        state = self.state["laser_state"] + [distance, theta]
+        state = self.state["pre_laser_state"] + self.state["laser_state"] + [distance, theta]
         return np.array(state)
 
     def _get_env_list(self):
@@ -574,6 +575,9 @@ class CusEnv(gym.Env):
                     return theta
         else:
             raise ValueError("Illegal velocity!")
+
+    def add_moving_coll(self):
+        pass
 
     @staticmethod
     def _get_distance(vec1, vec2=None):
