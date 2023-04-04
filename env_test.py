@@ -19,12 +19,12 @@ from envs import get_env
 
 if __name__ == "__main__":
     cfg.map_path = './envs/maps'
-    cfg.env_name = 'test2'
+    cfg.env_name = 'test4'
     cfg.num_processes = 8
 
     cfg.shape_fixed = True
-    cfg.render = False
-    # cfg.env_size = '500*300'
+    cfg.render = True
+    cfg.env_size = '500*500'
     cfg.robot_size = 5
     cfg.laser_range = np.pi / 3
     cfg.laser_length = 100
@@ -34,11 +34,11 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
 
     # envs = get_env(cfg, logger, multi=True)
-    env = get_env(cfg, logger, multi=False, show=True)
+    env = get_env(cfg, logger, multi=False, show=False)
+    env.add_moving_coll(5)
     # env.load_map(show=True)
 
     start = time.time()
-    # state = envs.reset()  # position='6, :', velocity='1, 3', target_position='330, 10'
     # state = env.reset(position='10, 380', target_position='380, 380', velocity='1, 0')
     state = env.reset()
     for t in count():

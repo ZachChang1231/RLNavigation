@@ -38,8 +38,9 @@ def main():
 
     # Set random seed
     # np.random.seed(config.seed)
-    # torch.manual_seed(config.seed)
+    torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
+    torch.set_num_threads(1)
 
     # Set the logger
     logging.basicConfig(level=logging.INFO, filemode='w')

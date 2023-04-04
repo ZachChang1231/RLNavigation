@@ -118,7 +118,8 @@ class SubprocVecEnv(VecEnv):
     def reset(self, **kwargs):
         for remote in self.remotes:
             remote.send(('reset', kwargs))
-        return np.stack([remote.recv() for remote in self.remotes])
+        results = [remote.recv() for remote in self.remotes]
+        return np.stack(results)
 
     def reset_task(self):
         for remote in self.remotes:

@@ -10,6 +10,7 @@
 """
 
 import os
+import time
 import numpy as np
 import torch
 from itertools import count
@@ -55,10 +56,11 @@ class A2CModel(object):
 class Trainer(A2CModel):
     def __init__(self, cfg, logger, device):
         super().__init__(cfg, logger, device)
+        self.model.train()
         self.tester = Tester(cfg, logger, device)
         self.envs = get_env(cfg, logger, multi=True)
         self.agent = A2CAgent(cfg, self.model)
-        self.rollout = RolloutStorage()
+        self.rollout = RolloutStorage(self.env.observation_space.shape)
 
     def run(self):
         if self.cfg.pretrained_path:
@@ -68,65 +70,63 @@ class Trainer(A2CModel):
             self.logger.info("Training from the very beginning...")
 
         frame_idx = 0
-        done = np.array([True for _ in range(self.cfg.num_processes)])
+
         state = self.envs.reset(
             position=self.cfg.init_position,
             target_position=self.cfg.target_position,
             velocity=self.cfg.init_velocity
         )
-
-        hns = [torch.zeros(1, self.cfg.hidden_size).to(self.device) for _ in range(self.cfg.num_processes)] if self.cfg.recurrent else None
+        state = torch.from_numpy(state).float().to(self.device)
+        self.rollout.obs[0].copy_(state)
+        self.rollout.to_device()
+        start = time.time()
 
         while frame_idx < self.cfg.max_frames:
 
-            if self.cfg.recurrent:
-                for i, v in enumerate(done):
-                    if v:
-                        hns[i] = torch.zeros(1, self.cfg.hidden_size).to(self.device)
-                    else:
-                        hns[i] = hns[i].detach()
-
-            for _ in range(self.cfg.num_steps):
-                state = torch.FloatTensor(state).to(self.device)
-                dist, value, hns = self.model(state, hns)
-
+            for step in range(self.cfg.num_steps):
+                with torch.no_grad():
+                    dist, value, hns = self.model(self.rollout.obs[step], self.rollout.recurrent_hidden_states[step],
+                                                  self.rollout.masks[step])
                 action = dist.sample()
-                next_state, reward, terminated, truncated,  _ = self.envs.step(action.cpu().numpy())
+                action_log_probs = dist.log_probs(action)
+                next_state, reward, terminated, truncated, _ = self.envs.step(action.cpu().numpy().squeeze())
                 self.datawriter.insert({'total_reward': reward})
-
-                self.rollout.insert(dist, action, value, reward, terminated, truncated)
-
-                state = next_state
+                masks = torch.FloatTensor([[0.0] if terminated_ else [1.0] for terminated_ in terminated])
+                bad_masks = torch.FloatTensor([[0.0] if truncated_ else [1.0] for truncated_ in truncated])
+                self.rollout.insert(next_state, hns, action, action_log_probs, value, reward, masks, bad_masks)
 
             frame_idx += 1
+            with torch.no_grad():
+                _, next_value, _ = self.model(self.rollout.obs[-1], self.rollout.recurrent_hidden_states[-1],
+                                              self.rollout.masks[-1])
+            self.rollout.compute_returns(next_value.detach(), self.cfg.gamma)
 
-            next_state = torch.FloatTensor(next_state).to(self.device)
-            _, next_value, _ = self.model(next_state, hns)
-            self.rollout.compute_returns(next_value, gamma=self.cfg.gamma)
-
-            actor_loss, critic_loss = self.agent.update(self.rollout)
+            value_loss, action_loss, dist_entropy = self.agent.update(self.rollout)
+            self.rollout.after_update()
 
             if self.cfg.noise:
                 self.model.reset_noise()
 
-            self.datawriter.insert({'actor_loss': actor_loss, 'critic_loss': critic_loss})
-
-            self.rollout.after_update()
+            self.datawriter.insert({"actor_loss": action_loss, "critic_loss": value_loss, "dist_entropy": dist_entropy})
 
             if frame_idx == self.cfg.max_frames - 1 and self.cfg.model_path != "":
                 mean_r, _, _, _ = self.datawriter.get_episode_reward(self.cfg.save_interval)
                 self.save_data("{}_avg_reward_{:.1f}".format(frame_idx, mean_r))
 
             if frame_idx % self.cfg.log_interval == 0:
+                end = time.time()
+                time_cost = end - start
+                start = end
                 episode_actor_loss, episode_critic_loss = self.datawriter.get_episode_loss(self.cfg.log_interval)
                 mean_r, median_r, min_r, max_r = self.datawriter.get_episode_reward(self.cfg.log_interval)
                 self.logger.info("Num frame index: {}/{}, "
                                  "Last {} training episode: actor loss: {:.2f}, critic loss: {:.2f}, "
                                  "mean/median reward: {:.1f}/{:.1f}, "
-                                 "min/max reward: {:.1f}/{:.1f}".format(frame_idx, int(self.cfg.max_frames),
-                                                                        self.cfg.log_interval,
-                                                                        episode_actor_loss, episode_critic_loss,
-                                                                        mean_r, median_r, min_r, max_r))
+                                 "min/max reward: {:.1f}/{:.1f}, "
+                                 "time cost: {:.1f}s".format(frame_idx, int(self.cfg.max_frames),
+                                                             self.cfg.log_interval,
+                                                             episode_actor_loss, episode_critic_loss,
+                                                             mean_r, median_r, min_r, max_r, time_cost))
 
             if self.cfg.eval_interval is not None and frame_idx % self.cfg.eval_interval == 0:
 
@@ -146,7 +146,7 @@ class Trainer(A2CModel):
                 if frame_idx < self.cfg.max_frames:
                     print_line(self.logger, 'train')
 
-        return self.datawriter.to_dist()
+        return self.datawriter.to_dict()
 
 
 class Tester(A2CModel):
@@ -161,15 +161,22 @@ class Tester(A2CModel):
             velocity=self.cfg.init_velocity
         )
         total_reward = 0
-        hn = [torch.zeros(1, self.cfg.hidden_size).to(self.device)] if self.cfg.recurrent else None
+        hn = torch.zeros(1, self.cfg.hidden_size).to(self.device)
+        mask = torch.zeros(1, 1).to(self.device)
         for i in count():
             if render:
                 self.env.render()
             if save_path:
                 self.env.save_fig(i, save_path)
-            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            dist, _, hn = self.model(state, hn)
-            next_state, reward, terminated, truncated, _ = self.env.step(dist.sample().cpu().numpy()[0])
+            state = torch.from_numpy(state).float().to(self.device).unsqueeze(0)
+            with torch.no_grad():
+                dist, _, _ = self.model(state, hn, mask)
+            action = dist.mode()
+            next_state, reward, terminated, truncated, _ = self.env.step(action.cpu().numpy()[0, 0])
+            mask = torch.tensor(
+                [[0.0] if terminated else [1.0]],
+                dtype=torch.float32,
+                device=self.device)
             state = next_state
             total_reward += reward
             if terminated or truncated:

@@ -32,7 +32,7 @@ class Config:
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'map6'   # environment to train on
+    env_name: str = 'test4'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
@@ -57,6 +57,7 @@ class Config:
     entropy_coef: float = 0.01  # entropy term coefficient
     value_loss_coef: float = 0.5  # value loss coefficient
     gamma: float = 0.99  # discount factor for rewards
+    max_grad_norm: float = 0.5
     max_frames: int = 1e6
     num_steps: int = 5  # number of forward steps in A2C
 
@@ -67,7 +68,7 @@ class Config:
     log_interval: int = 200  # log interval, one log per n updates
 
     """ Network Parameters """
-    noise: bool = False
+    noise: bool = True
     sigma_init: float = 0.02
     recurrent: bool = False
     hidden_size: int = 256

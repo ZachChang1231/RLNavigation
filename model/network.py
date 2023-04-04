@@ -14,7 +14,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.autograd import Variable
-from torch.distributions import Categorical
+# from torch.distributions import Categorical
+from model.distribution import FixedCategorical as Categorical
 
 
 class Policy(nn.Module):
@@ -28,7 +29,6 @@ class Policy(nn.Module):
             base = MLPBase
         else:
             raise NotImplementedError
-
         self.base = base(cfg)
         if not self.cfg.noise:
             self.actor_linear = nn.Sequential(
@@ -59,14 +59,24 @@ class Policy(nn.Module):
             self._hold_parameter(hold_list)
 
         self.init()
-        self.train()
 
-    def forward(self, inputs, hns):
-        x, hns = self.base(inputs, hns)
+    def forward(self, inputs, hns, masks):
+        x, hns = self.base(inputs, hns, masks)
         value = self.critic_linear(x)
         probs = self.actor_linear(x)
-        dist = Categorical(probs)
+        dist = Categorical(logits=probs)
         return dist, value, hns
+
+    def evaluate_actions(self, inputs, hns, action, masks):
+        x, hns = self.base(inputs, hns, masks)
+        value = self.critic_linear(x)
+        probs = self.actor_linear(x)
+        dist = Categorical(logits=probs)
+
+        action_log_probs = dist.log_probs(action)
+        dist_entropy = dist.entropy().mean()
+
+        return value, action_log_probs, dist_entropy, hns
 
     def reset_noise(self):
         if self.cfg.noise:
@@ -123,7 +133,7 @@ class NNBase(nn.Module):
         self._hidden_size = cfg.hidden_size
         self._recurrent = cfg.recurrent
 
-        if cfg.recurrent:  # TODO
+        if cfg.recurrent:
             self.gru = nn.GRU(cfg.hidden_size, cfg.hidden_size)
             for name, param in self.gru.named_parameters():
                 if 'bias' in name:
@@ -145,14 +155,61 @@ class NNBase(nn.Module):
     def output_size(self):
         return self._hidden_size
 
-    def _gru(self, x, hn):
+    def _gru(self, x, hn, masks):
         if x.size(0) == hn.size(0):
             x, hn = self.gru(x.unsqueeze(0), hn.unsqueeze(0))
             x = x.squeeze(0)
             hn = hn.squeeze(0)
         else:
-            pass
-            # TODO  Conv2d situation
+            # x is a (T, N, -1) tensor that has been flatten to (T * N, -1)
+            N = hn.size(0)
+            T = int(x.size(0) / N)
+
+            # unflatten
+            x = x.view(T, N, x.size(1))
+
+            # Same deal with masks
+            masks = masks.view(T, N)
+
+            # Let's figure out which steps in the sequence have a zero for any agent
+            # We will always assume t=0 has a zero in it as that makes the logic cleaner
+            has_zeros = ((masks[1:] == 0.0)
+                         .any(dim=-1)
+                         .nonzero()
+                         .squeeze()
+                         .cpu())
+
+            # +1 to correct the masks[1:]
+            if has_zeros.dim() == 0:
+                # Deal with scalar
+                has_zeros = [has_zeros.item() + 1]
+            else:
+                has_zeros = (has_zeros + 1).numpy().tolist()
+
+            # add t=0 and t=T to the list
+            has_zeros = [0] + has_zeros + [T]
+
+            hn = hn.unsqueeze(0)
+            outputs = []
+            for i in range(len(has_zeros) - 1):
+                # We can now process steps that don't have any zeros in masks together!
+                # This is much faster
+                start_idx = has_zeros[i]
+                end_idx = has_zeros[i + 1]
+
+                rnn_scores, hxs = self.gru(
+                    x[start_idx:end_idx],
+                    hn * masks[start_idx].view(1, -1, 1))
+
+                outputs.append(rnn_scores)
+
+            # assert len(outputs) == T
+            # x is a (T, N, -1) tensor
+            x = torch.cat(outputs, dim=0)
+            # flatten
+            x = x.view(T * N, -1)
+            hn = hn.squeeze(0)
+
         return x, hn
 
 
@@ -208,21 +265,13 @@ class MLPBase(NNBase):
             nn.ReLU()
         )
 
-    def forward(self, inputs, hns):
+    def forward(self, inputs, hns, masks):
         obs_feature = self.fc_o(inputs[:, :self.cfg.laser_num])
         delta_feature = self.fc_d(inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2] - inputs[:, :self.cfg.laser_num])
         target_feature = self.fc_t(inputs[:, -2:])
         x = self.fc_c(torch.cat((obs_feature, delta_feature, target_feature), dim=1))
-        if self.is_recurrent:  # TODO
-            split_x = torch.split(x, 1, dim=0)
-            x_list = []
-            hns_list = []
-            for x, hn in zip(split_x, hns):
-                x, hn = self._gru(x, hn)
-                x_list.append(x)
-                hns_list.append(hn)
-            x = torch.cat(x_list)
-            hns = hns_list
+        if self.is_recurrent:
+            x, hns = self._gru(x, hns, masks)
         return x, hns
 
 

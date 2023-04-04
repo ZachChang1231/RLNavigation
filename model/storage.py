@@ -19,53 +19,79 @@ device = torch.device('cuda' if torch.cuda.is_available() and cfg.use_cuda else 
 
 
 class RolloutStorage(object):
-    def __init__(self):
-        self.entropy = 0
-        self.log_probs = []
-        self.values = []
-        self.rewards = []
-        self.masks = []
-        self.bad_masks = []
-        self.returns = []
+    def __init__(self, obs_shape):
+        self.obs = torch.zeros(cfg.num_steps + 1, cfg.num_processes, *obs_shape)
+        self.recurrent_hidden_states = torch.zeros(
+            cfg.num_steps + 1, cfg.num_processes, cfg.hidden_size)
+        self.rewards = torch.zeros(cfg.num_steps, cfg.num_processes, 1)
+        self.value_preds = torch.zeros(cfg.num_steps + 1, cfg.num_processes, 1)
+        self.returns = torch.zeros(cfg.num_steps + 1, cfg.num_processes, 1)
+        self.action_log_probs = torch.zeros(cfg.num_steps, cfg.num_processes, 1)
+        self.actions = torch.zeros(cfg.num_steps, cfg.num_processes, 1)
+        self.actions = self.actions.long()
+        self.masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
 
-    def insert(self, dist, action, value, reward, terminated, truncated):
-        log_prob = dist.log_prob(action)
-        entropy = dist.entropy().mean()
-        self.entropy += entropy
-        self.log_probs.append(log_prob)
-        self.values.append(value)
-        self.rewards.append(torch.FloatTensor(reward).unsqueeze(1).to(device))
-        self.masks.append(torch.FloatTensor(1 - terminated).unsqueeze(1).to(device))
-        self.bad_masks.append(torch.FloatTensor(1 - truncated).unsqueeze(1).to(device))
+        # Masks that indicate whether it's a true terminal state
+        # or time limit end state
+        self.bad_masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
+
+        self.num_steps = cfg.num_steps
+        self.step = 0
+
+    def to_device(self):
+        self.obs = self.obs.to(device)
+        self.recurrent_hidden_states = self.recurrent_hidden_states.to(device)
+        self.rewards = self.rewards.to(device)
+        self.value_preds = self.value_preds.to(device)
+        self.returns = self.returns.to(device)
+        self.action_log_probs = self.action_log_probs.to(device)
+        self.actions = self.actions.to(device)
+        self.masks = self.masks.to(device)
+        self.bad_masks = self.bad_masks.to(device)
+
+    def insert(self, obs, recurrent_hidden_states, actions, action_log_probs,
+               value_preds, rewards, masks, bad_masks):
+        obs = torch.from_numpy(obs).float()
+        rewards = torch.from_numpy(rewards).unsqueeze(1)
+        self.obs[self.step + 1].copy_(obs)
+        self.recurrent_hidden_states[self.step +
+                                     1].copy_(recurrent_hidden_states)
+        self.actions[self.step].copy_(actions)
+        self.action_log_probs[self.step].copy_(action_log_probs)
+        self.value_preds[self.step].copy_(value_preds)
+        self.rewards[self.step].copy_(rewards)
+        self.masks[self.step + 1].copy_(masks)
+        self.bad_masks[self.step + 1].copy_(bad_masks)
+
+        self.step = (self.step + 1) % self.num_steps
 
     def after_update(self):
-        self.__init__()
+        self.obs[0].copy_(self.obs[-1])
+        self.recurrent_hidden_states[0].copy_(self.recurrent_hidden_states[-1])
+        self.masks[0].copy_(self.masks[-1])
+        self.bad_masks[0].copy_(self.bad_masks[-1])
 
     def compute_returns(self, next_value, gamma=0.99):
-        R = next_value
-        for step in reversed(range(len(self.rewards))):
-            if cfg.use_proper_time_limits:
-                R = (self.rewards[step] + gamma * R * self.masks[step]) * self.bad_masks[step] + \
-                    (1 - self.bad_masks[step]) * self.values[step]
-            else:
-                R = self.rewards[step] + gamma * R * self.masks[step]
-            self.returns.insert(0, R)
-
-    def feed_for_agent(self):
-        log_probs = torch.cat(self.log_probs)
-        returns = torch.cat(self.returns).detach()
-        values = torch.cat(self.values)
-        return log_probs, returns, values
+        if cfg.use_proper_time_limits:
+            self.returns[-1] = next_value
+            for step in reversed(range(self.rewards.size(0))):
+                self.returns[step] = (self.returns[step + 1] * gamma * self.masks[step + 1] + self.rewards[step]) * \
+                                     self.bad_masks[step + 1] + (1 - self.bad_masks[step + 1]) * self.value_preds[step]
+        else:
+            self.returns[-1] = next_value
+            for step in reversed(range(self.rewards.size(0))):
+                self.returns[step] = self.returns[step + 1] * gamma * self.masks[step + 1] + self.rewards[step]
 
 
 class DataWriter(object):
-    def __init__(self):  # TODO
-        self.max_len = 20000
+    def __init__(self):
+        self.max_len = cfg.num_steps * max(cfg.save_interval, cfg.eval_interval, cfg.log_interval) * 2
         self.mapping = {
             "total_reward": deque(maxlen=self.max_len),
             "eval_reward": deque(maxlen=self.max_len),
             "actor_loss": deque(maxlen=self.max_len),
-            "critic_loss": deque(maxlen=self.max_len)
+            "critic_loss": deque(maxlen=self.max_len),
+            "dist_entropy": deque(maxlen=self.max_len)
         }
         self.best_reward = 0
 
@@ -74,7 +100,7 @@ class DataWriter(object):
             assert key in self.mapping.keys(), 'Key not defined!'
             self.mapping[key].append(value)
 
-    def to_dist(self):
+    def to_dict(self):
         return self.mapping
 
     def get_episode_loss(self, interval):

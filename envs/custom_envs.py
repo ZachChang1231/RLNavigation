@@ -133,6 +133,9 @@ class CusEnv(gym.Env):
         assert self.action_space.contains(action), "Illegal action!"
         assert self.state["laser_state"], "Environment should reset before step!"
 
+        if "moving_coll_group" in self.map_info.keys():
+            self._moving_coll_step()
+
         if action == self.action_space.n - 1:
             self._forward()
         else:
@@ -249,11 +252,18 @@ class CusEnv(gym.Env):
                 self.axes.fill(group_edge_node[:, 0], group_edge_node[:, 1], 'k')
 
             robot = plt.Circle((self.position[0], self.position[1]), self.cfg.robot_size, color='r')
-            initial_position = plt.Circle((self.init_state_memory[0][0], self.init_state_memory[0][1]), self.cfg.robot_size+1, color='y')
-            target_position = plt.Circle((self.init_state_memory[1][0], self.init_state_memory[1][1]), self.cfg.robot_size+1, color='g')
+            initial_position = plt.Circle((self.init_state_memory[0][0], self.init_state_memory[0][1]),
+                                          self.cfg.robot_size + 1, color='y')
+            target_position = plt.Circle((self.init_state_memory[1][0], self.init_state_memory[1][1]),
+                                         self.cfg.robot_size + 1, color='g')
             self.axes.add_artist(robot)
             self.axes.add_artist(initial_position)
             self.axes.add_artist(target_position)
+
+            if "moving_coll_group" in self.map_info.keys():
+                for coll in self.map_info["moving_coll_group"]:
+                    c = plt.Circle((coll.p[0], coll.p[1]), coll.r, color='grey')
+                    self.axes.add_artist(c)
 
             for laser in self.state["laser_info"]:
                 self.axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b')
@@ -287,6 +297,11 @@ class CusEnv(gym.Env):
         axes.add_artist(robot)
         axes.add_artist(initial_position)
         axes.add_artist(target_position)
+
+        if "moving_coll_group" in self.map_info.keys():
+            for coll in self.map_info["moving_coll_group"]:
+                c = plt.Circle((coll.p[0], coll.p[1]), coll.r, color='grey')
+                axes.add_artist(c)
 
         for laser in self.state["laser_info"]:
             axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b')
@@ -337,8 +352,8 @@ class CusEnv(gym.Env):
         if curr_dis2coll == 0:
             collision_reward = -100
         else:
-            # collision_reward = -(pre_dis2coll - curr_dis2coll) * self.cfg.collision_reward_weight
-            collision_reward = 0
+            collision_reward = -(pre_dis2coll - curr_dis2coll) * self.cfg.collision_reward_weight
+            # collision_reward = 0
 
         time_step_reward = -self.cfg.time_step_reward_weight
 
@@ -346,10 +361,13 @@ class CusEnv(gym.Env):
 
     def _state_integration(self, normalize=True):
         distance, theta = self.state["target_state"]
+        distance_vec = [np.cos(theta), np.sin(theta)]
         if normalize:
-            theta = (theta + np.pi) / np.pi  # [0, 1]
+            theta = (theta + np.pi) / np.pi / 2  # [0, 1]
             distance = distance / self._get_distance([0, 0], self.map_info["shape"])  # [0, 1]
         state = self.state["pre_laser_state"] + self.state["laser_state"] + [distance, theta]
+        # state = self.state["pre_laser_state"] + self.state["laser_state"] + \
+        #     distance_vec + [distance]
         return np.array(state)
 
     def _get_env_list(self):
@@ -469,7 +487,7 @@ class CusEnv(gym.Env):
 
     @property
     def _self_node(self):
-        return geo.Point(self.position).buffer(self.cfg.robot_size)
+        return geo.Point(self.position).buffer(self.cfg.robot_size, 4)
 
     def _get_laser_posture(self):
         laser_array = []
@@ -495,7 +513,7 @@ class CusEnv(gym.Env):
                     continue
                 dis = 0
                 differ_laser = None
-                differ = laser.difference(geo.MultiPolygon(coll))
+                differ = laser.difference(geo.MultiPolygon(coll))  # TODO
                 if isinstance(differ, LineString):
                     dis = differ.length
                     differ_laser = differ
@@ -540,7 +558,7 @@ class CusEnv(gym.Env):
 
     def _check_point_available(self, point):
         if isinstance(point, np.ndarray):
-            point = geo.Point(point).buffer(self.cfg.robot_size)
+            point = geo.Point(point).buffer(self.cfg.robot_size, 4)
         assert isinstance(point, geo.base.BaseGeometry), "Point type unsupported!"
         return not self._collision_detection(point)
 
@@ -576,8 +594,31 @@ class CusEnv(gym.Env):
         else:
             raise ValueError("Illegal velocity!")
 
-    def add_moving_coll(self):
-        pass
+    def add_moving_coll(self, num):
+        radius = int(min(self.map_info["shape"]) / (2 * 15))
+        coll_object = []
+        self.map_info["moving_coll_group"] = []
+        for _ in range(num):
+            position = self.rnd.random(2) * (self.map_info["shape"] - np.array([radius * 2 + 10, radius * 2 + 10])) + \
+                       np.array([radius + 5, radius + 5])
+            theta = self.rnd.random() * np.pi * 2
+            velocity = np.array([np.cos(theta), np.sin(theta)])
+            coll = MovingColl(position, velocity, radius)
+            coll_object.append(coll)
+
+        coll_poly = [coll.poly for coll in coll_object]
+        self.map_info["moving_coll_group"] = coll_object
+        self.map_info["coll_tree"] = STRtree(self.map_info["coll_group"] + coll_poly)
+
+    def _moving_coll_step(self):
+        for coll in self.map_info["moving_coll_group"]:
+            coll.p = coll.p + coll.v * 5
+            if (coll.p[0] < coll.r) or (coll.p[0] > self.map_info["shape"][0] - coll.r):
+                coll.v[0] = -coll.v[0]
+            if (coll.p[1] < coll.r) or (coll.p[1] > self.map_info["shape"][1] - coll.r):
+                coll.v[1] = -coll.v[1]
+        coll_poly = [coll.poly for coll in self.map_info["moving_coll_group"]]
+        self.map_info["coll_tree"] = STRtree(self.map_info["coll_group"] + coll_poly)
 
     @staticmethod
     def _get_distance(vec1, vec2=None):
@@ -590,3 +631,14 @@ class CusEnv(gym.Env):
     @staticmethod
     def _rotate(vector, theta):
         return vector.dot(np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]))
+
+
+class MovingColl(object):
+    def __init__(self, position, velocity, radius):
+        self.p = position
+        self.v = velocity
+        self.r = radius
+
+    @property
+    def poly(self):
+        return geo.Point(self.p).buffer(self.r, 4)
