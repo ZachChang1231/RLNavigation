@@ -32,7 +32,7 @@ class Config:
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'test4'   # environment to train on
+    env_name: str = 'map0'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
