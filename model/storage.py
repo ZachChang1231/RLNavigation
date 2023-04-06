@@ -19,7 +19,7 @@ device = torch.device('cuda' if torch.cuda.is_available() and cfg.use_cuda else 
 
 
 class RolloutStorage(object):
-    def __init__(self, obs_shape):
+    def __init__(self, obs_shape, num_outputs):
         self.obs = torch.zeros(cfg.num_steps + 1, cfg.num_processes, *obs_shape)
         self.recurrent_hidden_states = torch.zeros(
             cfg.num_steps + 1, cfg.num_processes, cfg.hidden_size)
@@ -29,12 +29,15 @@ class RolloutStorage(object):
         self.action_log_probs = torch.zeros(cfg.num_steps, cfg.num_processes, 1)
         self.actions = torch.zeros(cfg.num_steps, cfg.num_processes, 1)
         self.actions = self.actions.long()
+        self.actions_onehot = torch.zeros(cfg.num_steps, cfg.num_processes, num_outputs)
+        self.actions_onehot = self.actions_onehot.long()
         self.masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
-
         # Masks that indicate whether it's a true terminal state
         # or time limit end state
         self.bad_masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
 
+        self.register = ["obs", "recurrent_hidden_states", "rewards", "value_preds", "returns", "action_log_probs",
+                         "actions", "actions_onehot", "masks", "bad_masks"]
         self.num_steps = cfg.num_steps
         self.step = 0
 
@@ -46,23 +49,24 @@ class RolloutStorage(object):
         self.returns = self.returns.to(device)
         self.action_log_probs = self.action_log_probs.to(device)
         self.actions = self.actions.to(device)
+        self.actions_onehot = self.actions_onehot.to(device)
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
 
-    def insert(self, obs, recurrent_hidden_states, actions, action_log_probs,
-               value_preds, rewards, masks, bad_masks):
-        obs = torch.from_numpy(obs).float()
-        rewards = torch.from_numpy(rewards).unsqueeze(1)
-        self.obs[self.step + 1].copy_(obs)
-        self.recurrent_hidden_states[self.step +
-                                     1].copy_(recurrent_hidden_states)
-        self.actions[self.step].copy_(actions)
-        self.action_log_probs[self.step].copy_(action_log_probs)
-        self.value_preds[self.step].copy_(value_preds)
-        self.rewards[self.step].copy_(rewards)
-        self.masks[self.step + 1].copy_(masks)
-        self.bad_masks[self.step + 1].copy_(bad_masks)
+    def insert(self, dic):
+        for key, value in dic.items():
+            assert key in self.register, "Key not defined!"
+            if key == "obs":
+                value = torch.from_numpy(value).float()
+            if key == "rewards":
+                value = torch.from_numpy(value).unsqueeze(1)
+            if key in ["obs", "recurrent_hidden_states", "masks", "bad_masks"]:
+                step = "self.step + 1"
+            else:
+                step = "self.step"
+            exec("self.{}[{}].copy_(value)".format(key, step))
 
+    def step_(self):
         self.step = (self.step + 1) % self.num_steps
 
     def after_update(self):
@@ -112,7 +116,3 @@ class DataWriter(object):
         length = len(self.mapping["total_reward"])
         reward = list(islice(self.mapping["total_reward"], length - interval * cfg.num_steps, length))
         return np.mean(reward), np.median(reward), np.min(reward), np.max(reward)
-
-
-
-

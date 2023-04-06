@@ -29,7 +29,7 @@ class Policy(nn.Module):
             base = MLPBase
         else:
             raise NotImplementedError
-        self.base = base(cfg)
+        self.base = base(cfg, cfg.recurrent)
         if not self.cfg.noise:
             self.actor_linear = nn.Sequential(
                 nn.Linear(cfg.hidden_size, cfg.hidden_size),
@@ -102,17 +102,9 @@ class Policy(nn.Module):
                     para.requires_grad = False
 
     @property
-    def is_recurrent(self):
-        return self.base.is_recurrent
-
-    @property
     def recurrent_hidden_state_size(self):
         """Size of rnn_hx."""
         return self.base.recurrent_hidden_state_size
-
-    def get_value(self, inputs, hn):
-        value, _, _ = self.base(inputs, hn)
-        return value
 
     def init(self):
         for m in self.modules():
@@ -127,13 +119,13 @@ class Policy(nn.Module):
 
 
 class NNBase(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, recurrent):
         super(NNBase, self).__init__()
         self.cfg = cfg
         self._hidden_size = cfg.hidden_size
-        self._recurrent = cfg.recurrent
+        self._recurrent = recurrent
 
-        if cfg.recurrent:
+        if self._recurrent:
             self.gru = nn.GRU(cfg.hidden_size, cfg.hidden_size)
             for name, param in self.gru.named_parameters():
                 if 'bias' in name:
@@ -214,8 +206,8 @@ class NNBase(nn.Module):
 
 
 class CNNBase(NNBase):
-    def __init__(self, cfg):    # TODO
-        super(CNNBase, self).__init__(cfg)
+    def __init__(self, cfg, recurrent):    # TODO
+        super(CNNBase, self).__init__(cfg, recurrent)
 
         self.fc = nn.Sequential(
             nn.Conv2d(cfg.laser_num, 32, 8, stride=4),
@@ -238,8 +230,8 @@ class CNNBase(NNBase):
 
 
 class MLPBase(NNBase):
-    def __init__(self, cfg):
-        super(MLPBase, self).__init__(cfg)
+    def __init__(self, cfg, recurrent):
+        super(MLPBase, self).__init__(cfg, recurrent)
         half_hidden_size = int(cfg.hidden_size / 2)
         quad_hidden_size = int(cfg.hidden_size / 4)
         self.fc_o = nn.Sequential(
@@ -265,14 +257,17 @@ class MLPBase(NNBase):
             nn.ReLU()
         )
 
-    def forward(self, inputs, hns, masks):
+    def forward(self, inputs, hns=None, masks=None, return_hn=True):
         obs_feature = self.fc_o(inputs[:, :self.cfg.laser_num])
         delta_feature = self.fc_d(inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2] - inputs[:, :self.cfg.laser_num])
         target_feature = self.fc_t(inputs[:, -2:])
         x = self.fc_c(torch.cat((obs_feature, delta_feature, target_feature), dim=1))
         if self.is_recurrent:
             x, hns = self._gru(x, hns, masks)
-        return x, hns
+        if return_hn:
+            return x, hns
+        else:
+            return x
 
 
 class NoisyLinear(nn.Linear):
@@ -328,3 +323,48 @@ class NoisyLinear(nn.Linear):
         self.weight_epsilon.copy_(torch.zeros(self.out_features, self.in_features))
         self.bias_epsilon.copy_(torch.zeros(self.out_features))
 
+
+class IntrinsicCuriosityModule(nn.Module):
+    def __init__(self, obs_shape, num_outputs, cfg):
+        super(IntrinsicCuriosityModule, self).__init__()
+        self.cfg = cfg
+
+        if len(obs_shape) == 3:
+            base = CNNBase
+        elif len(obs_shape) == 1:
+            base = MLPBase
+        else:
+            raise NotImplementedError
+        self.base = base(cfg, recurrent=False)
+
+        self.inverse_net = nn.Sequential(
+            nn.Linear(cfg.hidden_size * 2, cfg.icm_hidden_size),
+            nn.LeakyReLU(),
+            nn.Linear(cfg.icm_hidden_size, num_outputs)
+        )
+        self.forward_net = nn.Sequential(
+            nn.Linear(cfg.hidden_size + num_outputs, cfg.icm_hidden_size),
+            nn.LeakyReLU(),
+            nn.Linear(cfg.icm_hidden_size, cfg.hidden_size)
+        )
+
+        self.init()
+
+    def forward(self, state, next_state, action):
+        state_ft = self.base(state, return_hn=False)
+        next_state_ft = self.base(next_state, return_hn=False)
+        state_ft = state_ft.view(-1, self.cfg.hidden_size)
+        next_state_ft = next_state_ft.view(-1, self.cfg.hidden_size)
+        return self.inverse_net(torch.cat((state_ft, next_state_ft), 1)), self.forward_net(
+            torch.cat((state_ft, action), 1)), next_state_ft
+
+    def init(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)

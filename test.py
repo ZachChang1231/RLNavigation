@@ -39,7 +39,7 @@ def main():
         os.makedirs(image_save_path) if not os.path.exists(image_save_path) else None
     else:
         image_save_path = ""
-    model_path = os.path.join(save_path, "checkpoint/{}/policy.pt".format(episode))
+    model_path = os.path.join(save_path, "checkpoint/{}".format(episode))
     render = True if mode == "render" else False
 
     # set device
@@ -57,7 +57,8 @@ def main():
     tester = Tester(cfg, logger, device)
     tester.seed(np.random.randint(1e6))
     tester.load_data(model_path)
-    tester.run(render=render, save_path=image_save_path)
+    reward = tester.run(render=render, save_path=image_save_path)
+    logger.info("Reward: {:.2f}".format(reward))
 
     # create gif
 
@@ -68,7 +69,7 @@ def main():
 
 
 if __name__ == "__main__":
-    time_stamp = '2023_04_03_09_30_49'
-    episode = '822000_avg_reward_350.8'
+    time_stamp = '2023_04_05_23_13_17'
+    episode = '702000_avg_reward_355.2'
     mode = "render"  # "fig_saving"
     main()

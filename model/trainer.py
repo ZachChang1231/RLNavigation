@@ -13,12 +13,14 @@ import os
 import time
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from itertools import count
 from tqdm import tqdm
 
 from agent import A2CAgent
 from envs import get_env
-from model.network import Policy
+from model.network import Policy, IntrinsicCuriosityModule
 from model.storage import RolloutStorage, DataWriter
 from model.utils import print_line
 
@@ -30,27 +32,37 @@ class A2CModel(object):
         self.device = device
 
         self.env = get_env(cfg, logger)
-        obs_shape = self.env.observation_space.shape
-        num_inputs = obs_shape[0]
-        num_outputs = self.env.action_space.n
+        self.obs_shape = self.env.observation_space.shape
+        self.num_inputs = self.obs_shape[0]
+        self.num_outputs = self.env.action_space.n
 
         self.datawriter = DataWriter()
         self.model = Policy(
-            obs_shape,
-            num_outputs,
+            self.obs_shape,
+            self.num_outputs,
             cfg
         ).to(device)
+        if cfg.icm:
+            self.icm = IntrinsicCuriosityModule(
+                self.obs_shape,
+                self.num_outputs,
+                cfg
+            ).to(device)
 
     def run(self):
         raise NotImplementedError
 
     def load_data(self, save_dir):
-        self.model.load_state_dict(torch.load(save_dir))
+        self.model.load_state_dict(torch.load(os.path.join(save_dir, "policy.pt")))
+        if self.cfg.icm:
+            self.icm.load_state_dict(torch.load(os.path.join(save_dir, "icm.pt")))
 
     def save_data(self, path):
         save_dir = os.path.join(self.cfg.model_path, path)
         os.makedirs(save_dir) if not os.path.exists(save_dir) else None
         torch.save(self.model.state_dict(), os.path.join(save_dir, 'policy.pt'))
+        if self.cfg.icm:
+            torch.save(self.icm.state_dict(), os.path.join(save_dir, 'icm.pt'))
 
 
 class Trainer(A2CModel):
@@ -60,7 +72,12 @@ class Trainer(A2CModel):
         self.tester = Tester(cfg, logger, device)
         self.envs = get_env(cfg, logger, multi=True)
         self.agent = A2CAgent(cfg, self.model)
-        self.rollout = RolloutStorage(self.env.observation_space.shape)
+        self.rollout = RolloutStorage(self.obs_shape, self.num_outputs)
+        if cfg.icm:
+            self.icm.train()
+            self.fwd_criterion = nn.MSELoss(reduction="none")
+            self.agent.append(self.icm)
+            self.eta = self.cfg.eta
 
     def run(self):
         if self.cfg.pretrained_path:
@@ -89,11 +106,34 @@ class Trainer(A2CModel):
                                                   self.rollout.masks[step])
                 action = dist.sample()
                 action_log_probs = dist.log_probs(action)
-                next_state, reward, terminated, truncated, _ = self.envs.step(action.cpu().numpy().squeeze())
-                self.datawriter.insert({'total_reward': reward})
+                action_np = action.cpu().numpy().squeeze()
+                next_state, reward, terminated, truncated, _ = self.envs.step(action_np)
                 masks = torch.FloatTensor([[0.0] if terminated_ else [1.0] for terminated_ in terminated])
                 bad_masks = torch.FloatTensor([[0.0] if truncated_ else [1.0] for truncated_ in truncated])
-                self.rollout.insert(next_state, hns, action, action_log_probs, value, reward, masks, bad_masks)
+                action_oh = F.one_hot(torch.from_numpy(action_np), num_classes=self.num_outputs)
+                self.rollout.insert(
+                    {
+                        "obs": next_state,
+                        "recurrent_hidden_states": hns,
+                        "actions": action,
+                        "actions_onehot": action_oh,
+                        "action_log_probs": action_log_probs,
+                        "value_preds": value,
+                        "masks": masks,
+                        "bad_masks": bad_masks
+                    }
+                )
+                if self.cfg.icm:
+                    with torch.no_grad():
+                        pred_logits, pred_phi, phi = self.icm(self.rollout.obs[step],
+                                                              self.rollout.obs[step + 1],
+                                                              self.rollout.actions_onehot[step])
+                        fwd_loss = self.fwd_criterion(pred_phi, phi).mean(dim=1) / 2
+                        intrinsic_reward = self.eta * fwd_loss.detach()
+                        reward += intrinsic_reward.cpu().numpy()
+                self.rollout.insert({"rewards": reward})
+                self.rollout.step_()
+                self.datawriter.insert({'total_reward': reward})
 
             frame_idx += 1
             with torch.no_grad():
@@ -106,6 +146,9 @@ class Trainer(A2CModel):
 
             if self.cfg.noise:
                 self.model.reset_noise()
+
+            if self.cfg.eta_decay:
+                self.eta -= self.cfg.eta / self.cfg.max_frames
 
             self.datawriter.insert({"actor_loss": action_loss, "critic_loss": value_loss, "dist_entropy": dist_entropy})
 

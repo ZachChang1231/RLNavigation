@@ -18,10 +18,24 @@ class A2CAgent(object):
     def __init__(self, cfg, model):
         self.cfg = cfg
         self.model = model
-        self.optimizer = optim.Adam(self.model.parameters(), lr=cfg.lr)
+        critic = list(map(id, model.critic_linear.parameters()))
+        base_params = filter(lambda p: id(p) not in critic, model.parameters())
+        self.lr = cfg.lr * 10 if cfg.last_n else cfg.lr
+        self.optimizer = optim.Adam([{'params': base_params},
+                                     {'params': model.critic_linear.parameters(), 'lr': self.lr * 5}], lr=self.lr)
+        self.icm = None
+        self.icm_optimizer = None
+        self.fwd_criterion = None
+        self.inv_criterion = None
         # self.optimizer = optim.RMSprop(
         #     self.model.parameters(), lr=cfg.lr, eps=1e-5, alpha=0.99)
         # self.scheduler = StepLR(self.optimizer, step_size=200000, gamma=0.1)
+
+    def append(self, model):
+        self.icm = model
+        self.icm_optimizer = optim.Adam(self.icm.parameters(), lr=self.lr)
+        self.inv_criterion = nn.CrossEntropyLoss()
+        self.fwd_criterion = nn.MSELoss()
 
     def update(self, rollout):
         obs_shape = rollout.obs.size()[2:]
@@ -49,6 +63,26 @@ class A2CAgent(object):
         nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
 
         self.optimizer.step()
+
+        if self.cfg.icm:
+            action_onehot_shape = rollout.actions_onehot.size()[-1]
+            pred_logits, pred_phi, phi = self.icm(
+                rollout.obs[:-1].view(-1, *obs_shape),
+                rollout.obs[1:].view(-1, *obs_shape),
+                rollout.actions_onehot.view(-1, action_onehot_shape))
+            pred_logits = pred_logits.view(num_steps, num_processes, -1)
+            pred_phi = pred_phi.view(num_steps, num_processes, -1)
+            phi = phi.view(num_steps, num_processes, -1)
+
+            inv_loss = self.inv_criterion(pred_logits, rollout.actions_onehot.float())
+            fwd_loss = self.fwd_criterion(pred_phi, phi) / 2
+
+            curiosity_loss = inv_loss * (1 - self.cfg.beta) + self.cfg.beta * fwd_loss
+            self.icm_optimizer.zero_grad()
+            curiosity_loss.backward()
+            nn.utils.clip_grad_norm_(self.icm.parameters(), self.cfg.max_grad_norm)
+            self.icm_optimizer.step()
+
         # self.scheduler.step()
 
         return value_loss.item(), action_loss.item(), dist_entropy.item()

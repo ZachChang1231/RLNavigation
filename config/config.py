@@ -32,7 +32,7 @@ class Config:
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'map0'   # environment to train on
+    env_name: str = 'map6'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
@@ -45,7 +45,7 @@ class Config:
     laser_range: float = np.pi/2  # [-laser_range, laser_range]
     laser_length: float = 100
     laser_num: int = 15
-    arrive_reward_weight: float = 0.5
+    arrive_reward_weight: float = 0.3
     collision_reward_weight: float = 0.05
     time_step_reward_weight: float = 0.01
     max_steps: int = 500
@@ -57,6 +57,9 @@ class Config:
     entropy_coef: float = 0.01  # entropy term coefficient
     value_loss_coef: float = 0.5  # value loss coefficient
     gamma: float = 0.99  # discount factor for rewards
+    eta_decay: bool = True
+    eta: float = 5
+    beta: float = 0.2
     max_grad_norm: float = 0.5
     max_frames: int = 1e6
     num_steps: int = 5  # number of forward steps in A2C
@@ -68,8 +71,10 @@ class Config:
     log_interval: int = 200  # log interval, one log per n updates
 
     """ Network Parameters """
+    icm: bool = True
     noise: bool = True
     sigma_init: float = 0.02
     recurrent: bool = False
     hidden_size: int = 256
+    icm_hidden_size: int = 512
     last_n: int = 0  # 0 for fully trained
