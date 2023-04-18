@@ -259,7 +259,7 @@ class MLPBase(NNBase):
 
     def forward(self, inputs, hns=None, masks=None, return_hn=True):
         obs_feature = self.fc_o(inputs[:, :self.cfg.laser_num])
-        delta_feature = self.fc_d(inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2] - inputs[:, :self.cfg.laser_num])
+        delta_feature = self.fc_d(inputs[:, :self.cfg.laser_num] - inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2])
         target_feature = self.fc_t(inputs[:, -2:])
         x = self.fc_c(torch.cat((obs_feature, delta_feature, target_feature), dim=1))
         if self.is_recurrent:
@@ -329,13 +329,26 @@ class IntrinsicCuriosityModule(nn.Module):
         super(IntrinsicCuriosityModule, self).__init__()
         self.cfg = cfg
 
-        if len(obs_shape) == 3:
-            base = CNNBase
-        elif len(obs_shape) == 1:
-            base = MLPBase
-        else:
-            raise NotImplementedError
-        self.base = base(cfg, recurrent=False)
+        half_hidden_size = int(cfg.hidden_size / 2)
+        quad_hidden_size = int(cfg.hidden_size / 4)
+        self.base_spatial = nn.Sequential(
+            nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
+            nn.ReLU(),
+            # nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
+            # nn.ReLU()
+        )
+        self.base_temporal = nn.Sequential(
+            nn.Linear(in_features=2, out_features=quad_hidden_size),
+            nn.ReLU(),
+            # nn.Linear(in_features=quad_hidden_size, out_features=quad_hidden_size),
+            # nn.ReLU()
+        )
+        self.base_fc = nn.Sequential(
+            nn.Linear(in_features=half_hidden_size + quad_hidden_size, out_features=cfg.hidden_size),
+            nn.ReLU(),
+            # nn.Linear(in_features=half_hidden_size + quad_hidden_size, out_features=cfg.hidden_size),
+            # nn.ReLU()
+        )
 
         self.inverse_net = nn.Sequential(
             nn.Linear(cfg.hidden_size * 2, cfg.icm_hidden_size),
@@ -350,13 +363,18 @@ class IntrinsicCuriosityModule(nn.Module):
 
         self.init()
 
+    def base_forward(self, state):
+        obs_feature = self.base_spatial(state[:, :self.cfg.laser_num])
+        target_feature = self.base_temporal(state[:, -2:])
+        return self.base_fc(torch.cat((obs_feature, target_feature), dim=1))
+
     def forward(self, state, next_state, action):
-        state_ft = self.base(state, return_hn=False)
-        next_state_ft = self.base(next_state, return_hn=False)
+        state_ft = self.base_forward(state)
+        next_state_ft = self.base_forward(next_state)
         state_ft = state_ft.view(-1, self.cfg.hidden_size)
         next_state_ft = next_state_ft.view(-1, self.cfg.hidden_size)
         return self.inverse_net(torch.cat((state_ft, next_state_ft), 1)), self.forward_net(
-            torch.cat((state_ft, action), 1)), next_state_ft
+            torch.cat((state_ft.detach(), action), 1)), next_state_ft
 
     def init(self):
         for m in self.modules():

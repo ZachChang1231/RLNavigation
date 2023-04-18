@@ -69,7 +69,7 @@ def main():
 
 
 if __name__ == "__main__":
-    time_stamp = '2023_04_05_23_13_17'
-    episode = '702000_avg_reward_355.2'
+    time_stamp = '2023_04_17_03_52_59'
+    episode = '920184_avg_reward_-0.0'
     mode = "render"  # "fig_saving"
     main()

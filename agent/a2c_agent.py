@@ -15,27 +15,23 @@ from torch.optim.lr_scheduler import StepLR
 
 
 class A2CAgent(object):
-    def __init__(self, cfg, model):
+    def __init__(self, cfg, model, icm):
         self.cfg = cfg
         self.model = model
         critic = list(map(id, model.critic_linear.parameters()))
         base_params = filter(lambda p: id(p) not in critic, model.parameters())
         self.lr = cfg.lr * 10 if cfg.last_n else cfg.lr
-        self.optimizer = optim.Adam([{'params': base_params},
-                                     {'params': model.critic_linear.parameters(), 'lr': self.lr * 5}], lr=self.lr)
-        self.icm = None
+        self.icm = icm
         self.icm_optimizer = None
-        self.fwd_criterion = None
-        self.inv_criterion = None
+        self.fwd_criterion = nn.MSELoss()
+        self.inv_criterion = nn.CrossEntropyLoss()
+        para = [{'params': base_params}, {'params': model.critic_linear.parameters(), 'lr': self.lr * 5}]
+        if icm:
+            para += [{'params': self.icm.parameters()}]
+        self.optimizer = optim.Adam(para, lr=self.lr)
         # self.optimizer = optim.RMSprop(
         #     self.model.parameters(), lr=cfg.lr, eps=1e-5, alpha=0.99)
         # self.scheduler = StepLR(self.optimizer, step_size=200000, gamma=0.1)
-
-    def append(self, model):
-        self.icm = model
-        self.icm_optimizer = optim.Adam(self.icm.parameters(), lr=self.lr)
-        self.inv_criterion = nn.CrossEntropyLoss()
-        self.fwd_criterion = nn.MSELoss()
 
     def update(self, rollout):
         obs_shape = rollout.obs.size()[2:]
@@ -57,12 +53,7 @@ class A2CAgent(object):
 
         action_loss = -(advantages.detach() * action_log_probs).mean()
 
-        self.optimizer.zero_grad()
-        (value_loss * self.cfg.value_loss_coef + action_loss - dist_entropy * self.cfg.entropy_coef).backward()
-
-        nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
-
-        self.optimizer.step()
+        loss = value_loss * self.cfg.value_loss_coef + action_loss - dist_entropy * self.cfg.entropy_coef
 
         if self.cfg.icm:
             action_onehot_shape = rollout.actions_onehot.size()[-1]
@@ -77,13 +68,17 @@ class A2CAgent(object):
             inv_loss = self.inv_criterion(pred_logits, rollout.actions_onehot.float())
             fwd_loss = self.fwd_criterion(pred_phi, phi) / 2
 
-            curiosity_loss = inv_loss * (1 - self.cfg.beta) + self.cfg.beta * fwd_loss
-            self.icm_optimizer.zero_grad()
-            curiosity_loss.backward()
-            nn.utils.clip_grad_norm_(self.icm.parameters(), self.cfg.max_grad_norm)
-            self.icm_optimizer.step()
+            curiosity_loss = (inv_loss * (1 - self.cfg.beta) + self.cfg.beta * fwd_loss) * 10
+            loss += curiosity_loss
 
+        self.optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(list(self.model.parameters()) + list(self.icm.parameters()), self.cfg.max_grad_norm)
+        self.optimizer.step()
+
+        if self.cfg.icm:
+            return value_loss.item(), action_loss.item(), dist_entropy.item(), curiosity_loss.item()
         # self.scheduler.step()
-
-        return value_loss.item(), action_loss.item(), dist_entropy.item()
+        else:
+            return value_loss.item(), action_loss.item(), dist_entropy.item(), None
 

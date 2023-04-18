@@ -348,14 +348,16 @@ class CusEnv(gym.Env):
             arrive_reward = 100
         else:
             arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
+            # arrive_reward = 0
 
         if curr_dis2coll == 0:
             collision_reward = -100
         else:
-            collision_reward = -(pre_dis2coll - curr_dis2coll) * self.cfg.collision_reward_weight
-            # collision_reward = 0
+            # collision_reward = -(pre_dis2coll - curr_dis2coll) * self.cfg.collision_reward_weight
+            collision_reward = 0
 
         time_step_reward = -self.cfg.time_step_reward_weight
+        # time_step_reward = 0
 
         return arrive_reward + collision_reward + time_step_reward
 
@@ -365,7 +367,7 @@ class CusEnv(gym.Env):
         if normalize:
             theta = (theta + np.pi) / np.pi / 2  # [0, 1]
             distance = distance / self._get_distance([0, 0], self.map_info["shape"])  # [0, 1]
-        state = self.state["pre_laser_state"] + self.state["laser_state"] + [distance, theta]
+        state = self.state["laser_state"] + self.state["pre_laser_state"] + [distance, theta]
         # state = self.state["pre_laser_state"] + self.state["laser_state"] + \
         #     distance_vec + [distance]
         return np.array(state)

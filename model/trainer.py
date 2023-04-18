@@ -48,6 +48,8 @@ class A2CModel(object):
                 self.num_outputs,
                 cfg
             ).to(device)
+        else:
+            self.icm = None
 
     def run(self):
         raise NotImplementedError
@@ -71,13 +73,12 @@ class Trainer(A2CModel):
         self.model.train()
         self.tester = Tester(cfg, logger, device)
         self.envs = get_env(cfg, logger, multi=True)
-        self.agent = A2CAgent(cfg, self.model)
         self.rollout = RolloutStorage(self.obs_shape, self.num_outputs)
         if cfg.icm:
             self.icm.train()
             self.fwd_criterion = nn.MSELoss(reduction="none")
-            self.agent.append(self.icm)
             self.eta = self.cfg.eta
+        self.agent = A2CAgent(cfg, self.model, self.icm)
 
     def run(self):
         if self.cfg.pretrained_path:
@@ -87,6 +88,7 @@ class Trainer(A2CModel):
             self.logger.info("Training from the very beginning...")
 
         frame_idx = 0
+        save_iter = 0
 
         state = self.envs.reset(
             position=self.cfg.init_position,
@@ -130,18 +132,18 @@ class Trainer(A2CModel):
                                                               self.rollout.actions_onehot[step])
                         fwd_loss = self.fwd_criterion(pred_phi, phi).mean(dim=1) / 2
                         intrinsic_reward = self.eta * fwd_loss.detach()
-                        reward += intrinsic_reward.cpu().numpy()
+                        reward = reward + intrinsic_reward.cpu().numpy()
                 self.rollout.insert({"rewards": reward})
                 self.rollout.step_()
                 self.datawriter.insert({'total_reward': reward})
 
             frame_idx += 1
+            save_iter += 1
             with torch.no_grad():
                 _, next_value, _ = self.model(self.rollout.obs[-1], self.rollout.recurrent_hidden_states[-1],
                                               self.rollout.masks[-1])
             self.rollout.compute_returns(next_value.detach(), self.cfg.gamma)
-
-            value_loss, action_loss, dist_entropy = self.agent.update(self.rollout)
+            value_loss, action_loss, dist_entropy, curiosity_loss = self.agent.update(self.rollout)
             self.rollout.after_update()
 
             if self.cfg.noise:
@@ -150,25 +152,31 @@ class Trainer(A2CModel):
             if self.cfg.eta_decay:
                 self.eta -= self.cfg.eta / self.cfg.max_frames
 
-            self.datawriter.insert({"actor_loss": action_loss, "critic_loss": value_loss, "dist_entropy": dist_entropy})
+            self.datawriter.insert({"actor_loss": action_loss, "critic_loss": value_loss,
+                                    "dist_entropy": dist_entropy, "curiosity_loss": curiosity_loss})
 
             if frame_idx == self.cfg.max_frames - 1 and self.cfg.model_path != "":
+            # if save_iter >= self.cfg.save_interval and self.cfg.model_path != "":
                 mean_r, _, _, _ = self.datawriter.get_episode_reward(self.cfg.save_interval)
                 self.save_data("{}_avg_reward_{:.1f}".format(frame_idx, mean_r))
+                save_iter = 0
 
             if frame_idx % self.cfg.log_interval == 0:
                 end = time.time()
                 time_cost = end - start
                 start = end
-                episode_actor_loss, episode_critic_loss = self.datawriter.get_episode_loss(self.cfg.log_interval)
+                episode_actor_loss, episode_critic_loss, episode_curiosity_loss = \
+                    self.datawriter.get_episode_loss(self.cfg.log_interval)
                 mean_r, median_r, min_r, max_r = self.datawriter.get_episode_reward(self.cfg.log_interval)
                 self.logger.info("Num frame index: {}/{}, "
-                                 "Last {} training episode: actor loss: {:.2f}, critic loss: {:.2f}, "
+                                 "Last {} training episode: "
+                                 "actor loss: {:.2f}, critic loss: {:.2f}, curiosity loss: {}, "
                                  "mean/median reward: {:.1f}/{:.1f}, "
                                  "min/max reward: {:.1f}/{:.1f}, "
                                  "time cost: {:.1f}s".format(frame_idx, int(self.cfg.max_frames),
                                                              self.cfg.log_interval,
                                                              episode_actor_loss, episode_critic_loss,
+                                                             episode_curiosity_loss,
                                                              mean_r, median_r, min_r, max_r, time_cost))
 
             if self.cfg.eval_interval is not None and frame_idx % self.cfg.eval_interval == 0:
@@ -182,6 +190,7 @@ class Trainer(A2CModel):
                                                                                       eval_reward))
 
                 if eval_reward > self.datawriter.best_reward:
+                    save_iter = 0
                     self.datawriter.best_reward = eval_reward
                     self.save_data("{}_avg_reward_{:.1f}".format(frame_idx, eval_reward))
                     self.logger.info("New best model saved!")

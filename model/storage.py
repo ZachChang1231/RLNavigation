@@ -95,7 +95,8 @@ class DataWriter(object):
             "eval_reward": deque(maxlen=self.max_len),
             "actor_loss": deque(maxlen=self.max_len),
             "critic_loss": deque(maxlen=self.max_len),
-            "dist_entropy": deque(maxlen=self.max_len)
+            "dist_entropy": deque(maxlen=self.max_len),
+            "curiosity_loss": deque(maxlen=self.max_len)
         }
         self.best_reward = 0
 
@@ -109,8 +110,9 @@ class DataWriter(object):
 
     def get_episode_loss(self, interval):
         length = len(self.mapping["actor_loss"])
+        episode_curiosity_loss = None if not cfg.icm else round(np.mean(list(islice(self.mapping["curiosity_loss"], length - interval, length))), 2)
         return np.mean(list(islice(self.mapping["actor_loss"], length - interval, length))), \
-            np.mean(list(islice(self.mapping["critic_loss"], length - interval, length)))
+            np.mean(list(islice(self.mapping["critic_loss"], length - interval, length))), episode_curiosity_loss
 
     def get_episode_reward(self, interval):
         length = len(self.mapping["total_reward"])

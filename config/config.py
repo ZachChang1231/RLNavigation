@@ -45,7 +45,7 @@ class Config:
     laser_range: float = np.pi/2  # [-laser_range, laser_range]
     laser_length: float = 100
     laser_num: int = 15
-    arrive_reward_weight: float = 0.3
+    arrive_reward_weight: float = 0.5
     collision_reward_weight: float = 0.05
     time_step_reward_weight: float = 0.01
     max_steps: int = 500
@@ -57,24 +57,24 @@ class Config:
     entropy_coef: float = 0.01  # entropy term coefficient
     value_loss_coef: float = 0.5  # value loss coefficient
     gamma: float = 0.99  # discount factor for rewards
-    eta_decay: bool = True
-    eta: float = 5
+    eta_decay: bool = False
+    eta: float = 0.2 * 100
     beta: float = 0.2
     max_grad_norm: float = 0.5
     max_frames: int = 1e6
     num_steps: int = 5  # number of forward steps in A2C
 
     initial_interval: int = 1
-    save_interval: int = 2000  # save interval, one save per n updates
+    save_interval: int = 5000  # save interval, one save per n updates
     eval_interval: int = 2000  # eval interval, one eval per n updates
     eval_num: int = 10
     log_interval: int = 200  # log interval, one log per n updates
 
     """ Network Parameters """
     icm: bool = True
-    noise: bool = True
+    noise: bool = False
     sigma_init: float = 0.02
     recurrent: bool = False
     hidden_size: int = 256
-    icm_hidden_size: int = 512
+    icm_hidden_size: int = 256
     last_n: int = 0  # 0 for fully trained
