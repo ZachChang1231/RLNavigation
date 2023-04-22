@@ -22,12 +22,11 @@ class A2CAgent(object):
         base_params = filter(lambda p: id(p) not in critic, model.parameters())
         self.lr = cfg.lr * 10 if cfg.last_n else cfg.lr
         self.icm = icm
-        self.icm_optimizer = None
-        self.fwd_criterion = nn.MSELoss()
-        self.inv_criterion = nn.CrossEntropyLoss()
+        self.fwd_criterion = nn.MSELoss(reduction="none")
+        self.inv_criterion = nn.CrossEntropyLoss(reduction="none")
         para = [{'params': base_params}, {'params': model.critic_linear.parameters(), 'lr': self.lr * 5}]
         if icm:
-            para += [{'params': self.icm.parameters()}]
+            para += [{'params': self.icm.parameters(), 'lr': self.lr * 1}]
         self.optimizer = optim.Adam(para, lr=self.lr)
         # self.optimizer = optim.RMSprop(
         #     self.model.parameters(), lr=cfg.lr, eps=1e-5, alpha=0.99)
@@ -55,6 +54,7 @@ class A2CAgent(object):
 
         loss = value_loss * self.cfg.value_loss_coef + action_loss - dist_entropy * self.cfg.entropy_coef
 
+        curiosity_loss = None
         if self.cfg.icm:
             action_onehot_shape = rollout.actions_onehot.size()[-1]
             pred_logits, pred_phi, phi = self.icm(
@@ -64,16 +64,18 @@ class A2CAgent(object):
             pred_logits = pred_logits.view(num_steps, num_processes, -1)
             pred_phi = pred_phi.view(num_steps, num_processes, -1)
             phi = phi.view(num_steps, num_processes, -1)
+            done_masks = rollout.done_masks[:-1].squeeze()
 
-            inv_loss = self.inv_criterion(pred_logits, rollout.actions_onehot.float())
-            fwd_loss = self.fwd_criterion(pred_phi, phi) / 2
+            inv_loss = (self.inv_criterion(pred_logits.transpose(1, 2), rollout.actions_onehot.transpose(1, 2).float()) * done_masks).mean()
+            fwd_loss = (self.fwd_criterion(pred_phi, phi).mean(dim=2) * done_masks).mean() / 2
 
             curiosity_loss = (inv_loss * (1 - self.cfg.beta) + self.cfg.beta * fwd_loss) * 10
             loss += curiosity_loss
 
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(list(self.model.parameters()) + list(self.icm.parameters()), self.cfg.max_grad_norm)
+        para = list(self.model.parameters()) + list(self.icm.parameters()) if self.cfg.icm else list(self.model.parameters())
+        nn.utils.clip_grad_norm_(para, self.cfg.max_grad_norm)
         self.optimizer.step()
 
         if self.cfg.icm:

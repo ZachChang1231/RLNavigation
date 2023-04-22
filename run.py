@@ -53,8 +53,6 @@ def main():
 
     logger.info("Device: {}".format(device))
 
-    start = time.time()
-
     trainer = Trainer(config, logger, device)
 
     print_line(logger, 'train')
@@ -63,10 +61,6 @@ def main():
 
     with open(os.path.join(config.save_path, 'results.pickle'), 'wb') as f:
         pickle.dump(returns, f)
-
-    logger.info("----------------------------------------")
-    logger.info("        Done. Time cost: {:.2f}h        ".format((time.time() - start) / 3600))
-    logger.info("----------------------------------------")
 
 
 if __name__ == "__main__":

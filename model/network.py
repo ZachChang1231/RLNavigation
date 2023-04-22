@@ -30,30 +30,25 @@ class Policy(nn.Module):
         else:
             raise NotImplementedError
         self.base = base(cfg, cfg.recurrent)
-        if not self.cfg.noise:
+        if self.cfg.noise:
+            self.actor_linear = nn.Sequential(
+                NoisyLinear(cfg.hidden_size, cfg.hidden_size, sigma_init=cfg.sigma_init),
+                nn.ReLU(),
+                NoisyLinear(cfg.hidden_size, num_outputs, sigma_init=cfg.sigma_init),
+                nn.Softmax(dim=1),
+            )
+        else:
             self.actor_linear = nn.Sequential(
                 nn.Linear(cfg.hidden_size, cfg.hidden_size),
                 nn.ReLU(),
                 nn.Linear(cfg.hidden_size, num_outputs),
                 nn.Softmax(dim=1),
             )
-            self.critic_linear = nn.Sequential(
-                nn.Linear(cfg.hidden_size, cfg.hidden_size),
-                nn.ReLU(),
-                nn.Linear(cfg.hidden_size, 1),
-            )
-        else:
-            self.actor_linear = nn.Sequential(
-                nn.Linear(cfg.hidden_size, cfg.hidden_size),
-                nn.ReLU(),
-                NoisyLinear(cfg.hidden_size, num_outputs, sigma_init=cfg.sigma_init),
-                nn.Softmax(dim=1),
-            )
-            self.critic_linear = nn.Sequential(
-                nn.Linear(cfg.hidden_size, cfg.hidden_size),
-                nn.ReLU(),
-                NoisyLinear(cfg.hidden_size, 1),
-            )
+        self.critic_linear = nn.Sequential(
+            nn.Linear(cfg.hidden_size, cfg.hidden_size),
+            nn.ReLU(),
+            nn.Linear(cfg.hidden_size, 1),
+        )
         if cfg.last_n:
             hold_list = ["actor_module", "critic_module"]
             self._hold_parameter(hold_list)

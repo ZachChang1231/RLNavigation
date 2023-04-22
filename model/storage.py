@@ -35,9 +35,10 @@ class RolloutStorage(object):
         # Masks that indicate whether it's a true terminal state
         # or time limit end state
         self.bad_masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
+        self.done_masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
 
         self.register = ["obs", "recurrent_hidden_states", "rewards", "value_preds", "returns", "action_log_probs",
-                         "actions", "actions_onehot", "masks", "bad_masks"]
+                         "actions", "actions_onehot", "masks", "bad_masks", "done_masks"]
         self.num_steps = cfg.num_steps
         self.step = 0
 
@@ -52,6 +53,7 @@ class RolloutStorage(object):
         self.actions_onehot = self.actions_onehot.to(device)
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
+        self.done_masks = self.done_masks.to(device)
 
     def insert(self, dic):
         for key, value in dic.items():
@@ -74,6 +76,7 @@ class RolloutStorage(object):
         self.recurrent_hidden_states[0].copy_(self.recurrent_hidden_states[-1])
         self.masks[0].copy_(self.masks[-1])
         self.bad_masks[0].copy_(self.bad_masks[-1])
+        self.done_masks[0].copy_(self.done_masks[-1])
 
     def compute_returns(self, next_value, gamma=0.99):
         if cfg.use_proper_time_limits:
@@ -92,6 +95,8 @@ class DataWriter(object):
         self.max_len = cfg.num_steps * max(cfg.save_interval, cfg.eval_interval, cfg.log_interval) * 2
         self.mapping = {
             "total_reward": deque(maxlen=self.max_len),
+            "extrinsic_reward": deque(maxlen=self.max_len),
+            "intrinsic_reward": deque(maxlen=self.max_len),
             "eval_reward": deque(maxlen=self.max_len),
             "actor_loss": deque(maxlen=self.max_len),
             "critic_loss": deque(maxlen=self.max_len),
@@ -105,16 +110,23 @@ class DataWriter(object):
             assert key in self.mapping.keys(), 'Key not defined!'
             self.mapping[key].append(value)
 
-    def to_dict(self):
+    def __call__(self):
         return self.mapping
 
+    def _to_list(self, key, interval, step=1):
+        assert key in self.mapping.keys(), 'Key not defined!'
+        length = len(self.mapping[key])
+        return list(islice(self.mapping[key], length - interval * step, length))
+
     def get_episode_loss(self, interval):
-        length = len(self.mapping["actor_loss"])
-        episode_curiosity_loss = None if not cfg.icm else round(np.mean(list(islice(self.mapping["curiosity_loss"], length - interval, length))), 2)
-        return np.mean(list(islice(self.mapping["actor_loss"], length - interval, length))), \
-            np.mean(list(islice(self.mapping["critic_loss"], length - interval, length))), episode_curiosity_loss
+        return np.mean(self._to_list("actor_loss", interval)), np.mean(self._to_list("critic_loss", interval))
+
+    def get_curiosity_info(self, interval):
+        episode_curiosity_loss = self._to_list("curiosity_loss", interval)
+        intrinsic_reward = self._to_list("intrinsic_reward", interval, cfg.num_steps)
+        extrinsic_reward = self._to_list("extrinsic_reward", interval, cfg.num_steps)
+        return np.mean(episode_curiosity_loss), np.mean(intrinsic_reward), np.mean(extrinsic_reward), np.max(intrinsic_reward)
 
     def get_episode_reward(self, interval):
-        length = len(self.mapping["total_reward"])
-        reward = list(islice(self.mapping["total_reward"], length - interval * cfg.num_steps, length))
+        reward = self._to_list("total_reward", interval, cfg.num_steps)
         return np.mean(reward), np.median(reward), np.min(reward), np.max(reward)

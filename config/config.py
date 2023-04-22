@@ -36,8 +36,8 @@ class Config:
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
-    init_position: str = '20, :'
-    target_position: str = '480, :'
+    init_position: str = '40, 400'
+    target_position: str = '460, 100'
     init_velocity: str = ':, :'
     shape_fixed: bool = True
     turning_angle_num: int = 5
@@ -47,25 +47,27 @@ class Config:
     laser_num: int = 15
     arrive_reward_weight: float = 0.5
     collision_reward_weight: float = 0.05
-    time_step_reward_weight: float = 0.01
+    time_step_reward_weight: float = 0.1
+    explore_reward_weight: float = 0.1
     max_steps: int = 500
     use_proper_time_limits: bool = True
 
     """ Training Parameters """
     use_cuda: bool = True  # use gpu
-    lr: float = 1e-5  # learning rate
+    lr: float = 1e-4  # learning rate
     entropy_coef: float = 0.01  # entropy term coefficient
     value_loss_coef: float = 0.5  # value loss coefficient
     gamma: float = 0.99  # discount factor for rewards
-    eta_decay: bool = False
-    eta: float = 0.2 * 100
+    eta_decay_steps: int = 0  # 0/int
+    min_eta: float = 0.01
+    eta: float = 0.2 * 1
     beta: float = 0.2
     max_grad_norm: float = 0.5
     max_frames: int = 1e6
     num_steps: int = 5  # number of forward steps in A2C
 
     initial_interval: int = 1
-    save_interval: int = 5000  # save interval, one save per n updates
+    save_interval: int = 2000  # save interval, one save per n updates
     eval_interval: int = 2000  # eval interval, one eval per n updates
     eval_num: int = 10
     log_interval: int = 200  # log interval, one log per n updates

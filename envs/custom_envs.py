@@ -102,6 +102,7 @@ class CusEnv(gym.Env):
         }
         """
         self.temp_state = {"dis2goal": 0, "dis2coll": 0}
+        self.forward = True
 
         self.map_info = {
             "loaded": False,
@@ -138,8 +139,10 @@ class CusEnv(gym.Env):
 
         if action == self.action_space.n - 1:
             self._forward()
+            self.forward = True
         else:
             self._turn(action)
+            self.forward = False
 
         laser_array = self._get_laser_posture()
         laser_state, laser_info = self._get_laser_state(laser_array)
@@ -237,7 +240,7 @@ class CusEnv(gym.Env):
 
         return self._state_integration()
 
-    def render(self, mode='human'):
+    def render(self, message=None, mode='human'):
         if mode == 'human':
             if self.figure is None:
                 plt.ion()
@@ -267,6 +270,10 @@ class CusEnv(gym.Env):
 
             for laser in self.state["laser_info"]:
                 self.axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b')
+
+            if message:
+                for i, (key, value) in enumerate(message.items()):
+                    self.axes.text(10, 10 + i * 20, "{}: {}".format(key, str(round(value, 4))))
 
             plt.pause(0.01)
             # plt.show()
@@ -348,6 +355,7 @@ class CusEnv(gym.Env):
             arrive_reward = 100
         else:
             arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
+            # arrive_reward = max(arrive_reward, 0)
             # arrive_reward = 0
 
         if curr_dis2coll == 0:
@@ -359,15 +367,24 @@ class CusEnv(gym.Env):
         time_step_reward = -self.cfg.time_step_reward_weight
         # time_step_reward = 0
 
-        return arrive_reward + collision_reward + time_step_reward
+        # explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
+        explore_reward = 0
+
+        return arrive_reward + collision_reward + time_step_reward + explore_reward
 
     def _state_integration(self, normalize=True):
         distance, theta = self.state["target_state"]
         distance_vec = [np.cos(theta), np.sin(theta)]
+        target_position = self.target_position
+        position = self.position
         if normalize:
             theta = (theta + np.pi) / np.pi / 2  # [0, 1]
             distance = distance / self._get_distance([0, 0], self.map_info["shape"])  # [0, 1]
+            target_position = target_position / self.map_info["shape"]
+            position = position / self.map_info["shape"]
         state = self.state["laser_state"] + self.state["pre_laser_state"] + [distance, theta]
+        # state = self.state["laser_state"] + self.state["pre_laser_state"] + [distance, theta] + \
+        #     list(target_position) + list(position)
         # state = self.state["pre_laser_state"] + self.state["laser_state"] + \
         #     distance_vec + [distance]
         return np.array(state)
