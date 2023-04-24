@@ -93,16 +93,11 @@ class RolloutStorage(object):
 class DataWriter(object):
     def __init__(self):
         self.max_len = cfg.num_steps * max(cfg.save_interval, cfg.eval_interval, cfg.log_interval) * 2
-        self.mapping = {
-            "total_reward": deque(maxlen=self.max_len),
-            "extrinsic_reward": deque(maxlen=self.max_len),
-            "intrinsic_reward": deque(maxlen=self.max_len),
-            "eval_reward": deque(maxlen=self.max_len),
-            "actor_loss": deque(maxlen=self.max_len),
-            "critic_loss": deque(maxlen=self.max_len),
-            "dist_entropy": deque(maxlen=self.max_len),
-            "curiosity_loss": deque(maxlen=self.max_len)
-        }
+        mapping_keys = ["total_reward", "extrinsic_reward", "intrinsic_reward", "eval_reward", "actor_loss",
+                        "critic_loss", "dist_entropy", "curiosity_loss"]
+        self.mapping = dict()
+        for key in mapping_keys:
+            self.mapping[key] = deque(maxlen=self.max_len)
         self.best_reward = 0
 
     def insert(self, data_dict):

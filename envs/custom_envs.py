@@ -21,6 +21,7 @@ from gym import spaces
 from shapely import MultiLineString, LineString
 from shapely import geometry as geo
 from shapely import STRtree
+from shapely.ops import unary_union
 
 from envs.multiprocessing_env import SubprocVecEnv
 from model.utils import print_line
@@ -171,6 +172,9 @@ class CusEnv(gym.Env):
         if (self.reset_num_count == 0) or \
                 (self.cfg.initial_interval and self.reset_num_count % self.cfg.initial_interval == 0):
 
+            if self.cfg.task == "coll_avoid":
+                self.add_moving_coll(20)
+
             assert_dict = {"position": 0, "target_position": 0, "velocity": 0}
 
             if kwargs and not self.kwargs_memory:
@@ -178,8 +182,8 @@ class CusEnv(gym.Env):
             if not kwargs and self.kwargs_memory:
                 kwargs = self.kwargs_memory
             if kwargs:
-                assert False not in [True if i in list(assert_dict.keys()) else False for i in list(kwargs.keys())], \
-                    "Unsupported key in kwargs!"
+                # assert False not in [True if i in list(assert_dict.keys()) else False for i in list(kwargs.keys())], \
+                #     "Unsupported key in kwargs!"
                 for key in assert_dict.keys():
                     if key in kwargs.keys():
                         assert_dict[key] = 1
@@ -196,15 +200,12 @@ class CusEnv(gym.Env):
                                 value = value / np.sqrt(np.sum(np.square(value)))
                             exec("self." + key + "= value")
                         else:
-                            if kwargs[key].count(':') > 1:
+                            if not kwargs[key].replace(":", "").replace(",", "").replace(" ", ""):
                                 assert_dict[key] = 0
                                 continue
                             assert key != 'velocity', "Please clearly define the velocity!"
-                            x, y = kwargs[key].split(',')
-                            if ":" in x:
-                                point = self._get_available_points(y=float(y))
-                            else:
-                                point = self._get_available_points(x=float(x))
+                            x, y = self._resolve_string(kwargs[key])
+                            point = self._get_available_points(x=x, y=y)
                             exec("self." + key + "= point")
 
             for key, value in assert_dict.items():
@@ -230,13 +231,21 @@ class CusEnv(gym.Env):
             self.temp_state["dis2coll"] = self._calculate_min_distance2coll(self._self_node)
 
             self.init_state_memory = copy.deepcopy(
-                [self.position, self.target_position, self.velocity, self.state, self.temp_state])
+                [self.position, self.target_position, self.velocity, self.state, self.temp_state, self.map_info])
         else:
             assert self.init_state_memory is not None, "Memory not stored!"
-            self.position, self.target_position, self.velocity, self.state, self.temp_state = copy.deepcopy(
-                self.init_state_memory)
+            self.position, self.target_position, self.velocity, self.state, self.temp_state, self.map_info = \
+                copy.deepcopy(self.init_state_memory)
         self.reset_num_count += 1
         self.step_num = 0
+
+        # if self.cfg.task == "offline":
+        #     if "test" not in kwargs.keys():
+        #         self._init_state_step()
+        #         if self.reset_num_count % 100 == 0:
+        #             self.logger.info("reset nums: {}, expand: {}/{}".format(self.reset_num_count,
+        #                                                                     self.kwargs_memory["position"],
+        #                                                                     self.kwargs_memory["target_position"]))
 
         return self._state_integration()
 
@@ -268,8 +277,12 @@ class CusEnv(gym.Env):
                     c = plt.Circle((coll.p[0], coll.p[1]), coll.r, color='grey')
                     self.axes.add_artist(c)
 
-            for laser in self.state["laser_info"]:
-                self.axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b')
+            for i, laser in enumerate(self.state["laser_info"]):
+                if abs(self.cfg.laser_range - np.pi) < 1e-5 and i == 0:
+                    continue
+                self.axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b', linewidth=1, alpha=0.5)
+
+            self.axes.quiver(self.position[0], self.position[1], self.velocity[0], self.velocity[1], scale=5, color='k')
 
             if message:
                 for i, (key, value) in enumerate(message.items()):
@@ -310,8 +323,12 @@ class CusEnv(gym.Env):
                 c = plt.Circle((coll.p[0], coll.p[1]), coll.r, color='grey')
                 axes.add_artist(c)
 
-        for laser in self.state["laser_info"]:
-            axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b')
+        for i, laser in enumerate(self.state["laser_info"]):
+            if abs(self.cfg.laser_range - np.pi) < 1e-5 and i == 0:
+                continue
+            axes.plot([self.position[0], laser[0]], [self.position[1], laser[1]], color='b', linewidth=1, alpha=0.5)
+
+        axes.quiver(self.position[0], self.position[1], self.velocity[0], self.velocity[1], scale=5, color='k')
 
         plt.savefig(os.path.join(save_path, "{}.png".format(index)))
         plt.close()
@@ -351,24 +368,32 @@ class CusEnv(gym.Env):
         self.temp_state["dis2goal"] = curr_dis2goal
         self.temp_state["dis2coll"] = curr_dis2coll
 
-        if self._arrive:
-            arrive_reward = 100
+        if self.cfg.task == "coll_avoid":
+            arrive_reward = 0
+            explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
         else:
-            arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
-            # arrive_reward = max(arrive_reward, 0)
-            # arrive_reward = 0
+            explore_reward = 0
+            if self._arrive:
+                arrive_reward = 100
+            else:
+                arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
+                # arrive_reward = max(arrive_reward, 0)
+                # arrive_reward = 0
 
         if curr_dis2coll == 0:
-            collision_reward = -100
+            if self.cfg.task == "offline":
+                collision_reward = 0
+            else:
+                collision_reward = -100
         else:
             # collision_reward = -(pre_dis2coll - curr_dis2coll) * self.cfg.collision_reward_weight
-            collision_reward = 0
+            if self.cfg.task == "coll_avoid":
+                collision_reward = 1
+            else:
+                collision_reward = 0
 
         time_step_reward = -self.cfg.time_step_reward_weight
         # time_step_reward = 0
-
-        # explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
-        explore_reward = 0
 
         return arrive_reward + collision_reward + time_step_reward + explore_reward
 
@@ -532,7 +557,7 @@ class CusEnv(gym.Env):
                     continue
                 dis = 0
                 differ_laser = None
-                differ = laser.difference(geo.MultiPolygon(coll))  # TODO
+                differ = laser.difference(unary_union(coll))
                 if isinstance(differ, LineString):
                     dis = differ.length
                     differ_laser = differ
@@ -558,12 +583,10 @@ class CusEnv(gym.Env):
             while count < 1e4:
                 if not kwargs:
                     point = self.rnd.random(2) * self.map_info["shape"]
-                elif 'x' in kwargs.keys():
-                    point = np.array([kwargs['x'], self.rnd.random() * self.map_info["shape"][1]])
-                elif 'y' in kwargs.keys():
-                    point = np.array([self.rnd.random() * self.map_info["shape"][0], kwargs['y']])
                 else:
-                    raise ValueError("Key undefined!")
+                    x = self.rnd.random() * (kwargs["x"][1] - kwargs["x"][0]) + kwargs["x"][0]
+                    y = self.rnd.random() * (kwargs["y"][1] - kwargs["y"][0]) + kwargs["y"][0]
+                    point = np.array([x, y])
                 count += 1
                 if self._check_point_available(point):
                     flag = 1
@@ -614,7 +637,7 @@ class CusEnv(gym.Env):
             raise ValueError("Illegal velocity!")
 
     def add_moving_coll(self, num):
-        radius = int(min(self.map_info["shape"]) / (2 * 15))
+        radius = int(min(self.map_info["shape"]) / (2 * 10))
         coll_object = []
         self.map_info["moving_coll_group"] = []
         for _ in range(num):
@@ -630,8 +653,9 @@ class CusEnv(gym.Env):
         self.map_info["coll_tree"] = STRtree(self.map_info["coll_group"] + coll_poly)
 
     def _moving_coll_step(self):
+        coll_speed = 2
         for coll in self.map_info["moving_coll_group"]:
-            coll.p = coll.p + coll.v * 5
+            coll.p = coll.p + coll.v * coll_speed
             if (coll.p[0] < coll.r) or (coll.p[0] > self.map_info["shape"][0] - coll.r):
                 coll.v[0] = -coll.v[0]
             if (coll.p[1] < coll.r) or (coll.p[1] > self.map_info["shape"][1] - coll.r):
@@ -650,6 +674,41 @@ class CusEnv(gym.Env):
     @staticmethod
     def _rotate(vector, theta):
         return vector.dot(np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]))
+
+    def _resolve_string(self, s):
+        def _resolve_coord(v, coord):
+            v_ = v.replace(" ", "")
+            if ":" in v_:
+                min_v, max_v = v_.split(":")
+                min_v = float(min_v) if min_v else 0.0
+                if max_v:
+                    max_v = float(max_v)
+                else:
+                    if coord == "x":
+                        max_v = self.map_info["shape"][0]
+                    else:
+                        max_v = self.map_info["shape"][1]
+            else:
+                min_v = max_v = float(v_)
+            return [min_v, max_v]
+        x, y = s.split(",")
+        return [_resolve_coord(x, "x"), _resolve_coord(y, "y")]
+
+    def _init_state_step(self):
+        def _expand(s, fix_x=False):
+            steps = (460 - 50) / (1e3 * 5)
+            x, y = s.split(",")
+            x_max = x.split(":")[-1] if ":" in x else x
+            y_max = y.split(":")[-1] if ":" in y else y
+            next_x_max, next_y_max = str(min(float(x_max) + steps, 460)), str(min(float(y_max) + steps, 460))
+            if fix_x:
+                s = x + "," + y.replace(y_max, next_y_max)
+            else:
+                s = x.replace(x_max, next_x_max) + "," + y.replace(y_max, next_y_max)
+            return s
+        assert self.kwargs_memory, "Reset before step!"
+        self.kwargs_memory["position"] = _expand(self.kwargs_memory["position"], fix_x=True)
+        self.kwargs_memory["target_position"] = _expand(self.kwargs_memory["target_position"])
 
 
 class MovingColl(object):

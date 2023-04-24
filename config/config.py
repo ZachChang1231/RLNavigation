@@ -25,30 +25,32 @@ class Config:
     model_path: str = ''
     map_path: str = './envs/maps'
     pretrained_path: str = ""  # load from pretrained file
+    coll_avoid_pretrained_path: str = ""
+    offline_pretrained_path: str = ""
     seed: int = 9527  # random seed
-    task: str = 'online'  # coll_avoid, offline, online
+    task: str = 'offline'  # coll_avoid, offline, online
     num_processes: int = 8  # how many training processes to use
     # assert num_processes <= num_cpu, "The number can't be greater than {}".format(num_cpu)
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'map6'   # environment to train on
+    env_name: str = 'map9'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
-    init_position: str = '40, 400'
-    target_position: str = '460, 100'
+    init_position: str = '40, :'
+    target_position: str = '460, :'
     init_velocity: str = ':, :'
     shape_fixed: bool = True
     turning_angle_num: int = 5
     turning_range: float = np.pi/6  # [-turning_range, turning_range]
-    laser_range: float = np.pi/2  # [-laser_range, laser_range]
+    laser_range: float = np.pi  # [-laser_range, laser_range]
     laser_length: float = 100
-    laser_num: int = 15
-    arrive_reward_weight: float = 0.5
+    laser_num: int = 3
+    arrive_reward_weight: float = 0.05
     collision_reward_weight: float = 0.05
     time_step_reward_weight: float = 0.1
-    explore_reward_weight: float = 0.1
+    explore_reward_weight: float = 0.5
     max_steps: int = 500
     use_proper_time_limits: bool = True
 
@@ -62,6 +64,9 @@ class Config:
     min_eta: float = 0.01
     eta: float = 0.2 * 1
     beta: float = 0.2
+    k: float = 1
+    lambda_: float = 0.3
+    mu_decay_steps: float = 1e5
     max_grad_norm: float = 0.5
     max_frames: int = 1e6
     num_steps: int = 5  # number of forward steps in A2C
@@ -73,7 +78,7 @@ class Config:
     log_interval: int = 200  # log interval, one log per n updates
 
     """ Network Parameters """
-    icm: bool = True
+    icm: bool = False
     noise: bool = False
     sigma_init: float = 0.02
     recurrent: bool = False

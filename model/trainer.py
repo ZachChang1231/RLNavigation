@@ -8,7 +8,7 @@
 # version    ：python 3.8
 # Description：
 """
-
+import copy
 import os
 import time
 import numpy as np
@@ -22,7 +22,7 @@ from agent import A2CAgent
 from envs import get_env
 from model.network import Policy, IntrinsicCuriosityModule
 from model.storage import RolloutStorage, DataWriter
-from model.utils import print_line
+from model.utils import print_line, ActionScheduler
 
 
 class A2CModel(object):
@@ -50,6 +50,15 @@ class A2CModel(object):
             ).to(device)
         else:
             self.icm = None
+        if cfg.task == "online":
+            self.action_scheduler = ActionScheduler(cfg)
+            cfg_online = copy.deepcopy(cfg)
+            cfg_online.task = "coll_avoid"
+            self.coll_module = Policy(self.obs_shape, self.num_outputs, cfg_online).to(device)
+            cfg_online.task = "offline"
+            self.offline_module = Policy(self.obs_shape, self.num_outputs, cfg_online).to(device)
+            self.coll_module.load_state_dict(torch.load(cfg.coll_avoid_pretrained_path))
+            self.offline_module.load_state_dict(torch.load(cfg.offline_pretrained_path))
 
     def run(self):
         raise NotImplementedError
@@ -119,7 +128,18 @@ class Trainer(A2CModel):
                 with torch.no_grad():
                     dist, value, hns = self.model(self.rollout.obs[step], self.rollout.recurrent_hidden_states[step],
                                                   self.rollout.masks[step])
+                    if self.cfg.task == "online":
+                        dist_coll, _, _ = self.coll_module(self.rollout.obs[step],
+                                                           self.rollout.recurrent_hidden_states[step],
+                                                           self.rollout.masks[step])
+                        action_coll = dist_coll.mode()
+                        dist_offline, _, _ = self.offline_module(self.rollout.obs[step],
+                                                                 self.rollout.recurrent_hidden_states[step],
+                                                                 self.rollout.masks[step])
+                        action_offline = dist_offline.mode()
                 action = dist.sample()
+                if self.cfg.task == "online":
+                    action = self.action_scheduler(action, action_coll, action_offline, self.rollout.obs[step])
                 action_log_probs = dist.log_probs(action)
                 action_np = action.cpu().numpy().squeeze()
                 next_state, reward, terminated, truncated, _ = self.envs.step(action_np)
@@ -146,7 +166,8 @@ class Trainer(A2CModel):
                         pred_logits, pred_phi, phi = self.icm(self.rollout.obs[step],
                                                               self.rollout.obs[step + 1],
                                                               self.rollout.actions_onehot[step])
-                        fwd_loss = self.fwd_criterion(pred_phi, phi).mean(dim=1) * self.rollout.done_masks[step].squeeze() / 2
+                        fwd_loss = self.fwd_criterion(pred_phi, phi).mean(dim=1) * self.rollout.done_masks[
+                            step].squeeze() / 2
                         intrinsic_reward = self.eta * fwd_loss.detach().cpu().numpy()
                         self.datawriter.insert({"intrinsic_reward": intrinsic_reward})
                         reward = reward + intrinsic_reward
@@ -173,8 +194,8 @@ class Trainer(A2CModel):
             self.datawriter.insert({"actor_loss": action_loss, "critic_loss": value_loss,
                                     "dist_entropy": dist_entropy, "curiosity_loss": curiosity_loss})
 
-            # if frame_idx == self.cfg.max_frames - 1 and self.cfg.model_path != "":
-            if save_iter >= self.cfg.save_interval and self.cfg.model_path != "":
+            if frame_idx == self.cfg.max_frames - 1 and self.cfg.model_path != "":
+                # if save_iter >= self.cfg.save_interval and self.cfg.model_path != "":
                 mean_r, _, _, _ = self.datawriter.get_episode_reward(self.cfg.save_interval)
                 self.save_data("{}_avg_reward_{:.1f}".format(frame_idx, mean_r))
                 save_iter = 0

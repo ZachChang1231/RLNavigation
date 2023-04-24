@@ -8,14 +8,16 @@
 # version    ：python 3.8
 # Description：
 """
-
+import copy
 import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.autograd import Variable
 # from torch.distributions import Categorical
+
 from model.distribution import FixedCategorical as Categorical
+from model.utils import load_state_dict
 
 
 class Policy(nn.Module):
@@ -30,24 +32,29 @@ class Policy(nn.Module):
         else:
             raise NotImplementedError
         self.base = base(cfg, cfg.recurrent)
+        hidden_size = cfg.hidden_size
+        for module in reversed(list(self.base.fc_c.modules())):
+            if "Linear" in str(module.__class__):
+                hidden_size = module.out_features
+                break
         if self.cfg.noise:
             self.actor_linear = nn.Sequential(
-                NoisyLinear(cfg.hidden_size, cfg.hidden_size, sigma_init=cfg.sigma_init),
-                nn.ReLU(),
-                NoisyLinear(cfg.hidden_size, num_outputs, sigma_init=cfg.sigma_init),
+                # NoisyLinear(hidden_size, hidden_size, sigma_init=cfg.sigma_init),
+                # nn.ReLU(),
+                NoisyLinear(hidden_size, num_outputs, sigma_init=cfg.sigma_init),
                 nn.Softmax(dim=1),
             )
         else:
             self.actor_linear = nn.Sequential(
-                nn.Linear(cfg.hidden_size, cfg.hidden_size),
-                nn.ReLU(),
-                nn.Linear(cfg.hidden_size, num_outputs),
+                # nn.Linear(hidden_size, hidden_size),
+                # nn.ReLU(),
+                nn.Linear(hidden_size, num_outputs),
                 nn.Softmax(dim=1),
             )
         self.critic_linear = nn.Sequential(
-            nn.Linear(cfg.hidden_size, cfg.hidden_size),
-            nn.ReLU(),
-            nn.Linear(cfg.hidden_size, 1),
+            # nn.Linear(cfg.hidden_size, cfg.hidden_size),
+            # nn.ReLU(),
+            nn.Linear(hidden_size, 1),
         )
         if cfg.last_n:
             hold_list = ["actor_module", "critic_module"]
@@ -229,35 +236,68 @@ class MLPBase(NNBase):
         super(MLPBase, self).__init__(cfg, recurrent)
         half_hidden_size = int(cfg.hidden_size / 2)
         quad_hidden_size = int(cfg.hidden_size / 4)
-        self.fc_o = nn.Sequential(
-            nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
-            nn.ReLU(),
-            # nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
-            # nn.ReLU()
-        )
-        self.fc_d = nn.Sequential(
-            nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
-            nn.ReLU(),
-            # nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
-            # nn.ReLU()
-        )
-        self.fc_t = nn.Sequential(
-            nn.Linear(in_features=2, out_features=quad_hidden_size),
-            nn.ReLU(),
-            # nn.Linear(in_features=quad_hidden_size, out_features=quad_hidden_size),
-            # nn.ReLU()
-        )
-        self.fc_c = nn.Sequential(
-            nn.Linear(in_features=half_hidden_size * 2 + quad_hidden_size, out_features=cfg.hidden_size),
-            nn.ReLU()
-        )
+        if cfg.task == "coll_avoid":
+            self.feature = None
+            self.fc_o = nn.Sequential(
+                nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
+                nn.ReLU(),
+                nn.Linear(in_features=half_hidden_size, out_features=quad_hidden_size),
+                nn.ReLU()
+            )
+            self.fc_d = nn.Sequential(
+                nn.Linear(in_features=cfg.laser_num, out_features=half_hidden_size),
+                nn.ReLU(),
+                nn.Linear(in_features=half_hidden_size, out_features=quad_hidden_size),
+                nn.ReLU()
+            )
+            self.fc_c = nn.Sequential(
+                nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
+                nn.ReLU()
+            )
+        elif cfg.task == "offline":
+            self.feature = None
+            self.fc_c = nn.Sequential(
+                nn.Linear(in_features=2, out_features=quad_hidden_size),
+                nn.ReLU(),
+                nn.Linear(in_features=quad_hidden_size, out_features=quad_hidden_size),
+                nn.ReLU()
+            )
+        elif cfg.task == "online":
+            assert cfg.coll_avoid_pretrained_path and cfg.offline_pretrained_path, "Pretrained module not found!"
+            cfg_online = copy.deepcopy(cfg)
+            cfg_online.task = "coll_avoid"
+            self.coll_avoid_module = MLPBase(cfg, cfg.recurrent)
+            load_state_dict(self.coll_avoid_module, cfg.coll_avoid_pretrained_path)
+            cfg_online.task = "offline"
+            self.offline_module = MLPBase(cfg, cfg.recurrent)
+            load_state_dict(self.offline_module, cfg.offline_pretrained_path)
+            self.fc_c = nn.Sequential(
+                nn.Linear(in_features=quad_hidden_size + half_hidden_size, out_features=half_hidden_size),
+                nn.ReLU(),
+                nn.Linear(in_features=half_hidden_size, out_features=half_hidden_size),
+                nn.ReLU()
+            )
+        else:
+            raise NotImplementedError
 
     def forward(self, inputs, hns=None, masks=None, return_hn=True):
-        obs_feature = self.fc_o(inputs[:, :self.cfg.laser_num])
-        delta_feature = self.fc_d(inputs[:, :self.cfg.laser_num] - inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2])
-        target_feature = self.fc_t(inputs[:, -2:])
-        x = self.fc_c(torch.cat((obs_feature, delta_feature, target_feature), dim=1))
-        if self.is_recurrent:
+        if self.cfg.task == "coll_avoid":
+            obs_feature = self.fc_o(inputs[:, :self.cfg.laser_num])
+            delta_feature = self.fc_d(inputs[:, :self.cfg.laser_num] - inputs[:, self.cfg.laser_num:self.cfg.laser_num * 2])
+            x = self.fc_c(torch.cat((obs_feature, delta_feature), dim=1))
+            self.feature = x.detach()
+        elif self.cfg.task == "offline":
+            x = self.fc_c(inputs[:, -2:])
+            self.feature = x.detach()
+        elif self.cfg.task == "online":
+            self.coll_avoid_module(inputs)
+            self.offline_module(inputs)
+            x = self.fc_c(torch.cat((self.coll_avoid_module.feature, self.offline_module.feature), dim=1))
+        else:
+            raise NotImplementedError
+
+        # target_feature = self.fc_t(inputs[:, -2:])
+        if self.is_recurrent:  # TODO
             x, hns = self._gru(x, hns, masks)
         if return_hn:
             return x, hns
