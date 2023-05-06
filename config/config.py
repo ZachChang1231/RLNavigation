@@ -25,32 +25,32 @@ class Config:
     model_path: str = ''
     map_path: str = './envs/maps'
     pretrained_path: str = ""  # load from pretrained file
-    coll_avoid_pretrained_path: str = ""
-    offline_pretrained_path: str = ""
+    coll_avoid_pretrained_path: str = "./result/2023_04_25_18_04_50/checkpoint/92000_avg_reward_368.3/policy.pt"
+    offline_pretrained_path: str = "./result/2023_04_25_14_20_38/checkpoint/156000_avg_reward_122.5/policy.pt"
     seed: int = 9527  # random seed
-    task: str = 'offline'  # coll_avoid, offline, online
-    num_processes: int = 8  # how many training processes to use
+    task: str = 'online'  # coll_avoid, offline, online
+    num_processes: int = 16  # how many training processes to use
     # assert num_processes <= num_cpu, "The number can't be greater than {}".format(num_cpu)
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'map9'   # environment to train on
+    env_name: str = 'map7'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
     env_size: str = '500*500'
-    init_position: str = '40, :'
-    target_position: str = '460, :'
-    init_velocity: str = ':, :'
+    init_position: str = '50, 200'
+    target_position: str = '450, 200'
+    init_velocity: str = '1, 0'
     shape_fixed: bool = True
     turning_angle_num: int = 5
     turning_range: float = np.pi/6  # [-turning_range, turning_range]
-    laser_range: float = np.pi  # [-laser_range, laser_range]
-    laser_length: float = 100
-    laser_num: int = 3
-    arrive_reward_weight: float = 0.05
+    laser_range: float = np.pi*3/4  # [-laser_range, laser_range]
+    laser_length: float = 200
+    laser_num: int = 31
+    arrive_reward_weight: float = 0.3
     collision_reward_weight: float = 0.05
     time_step_reward_weight: float = 0.1
-    explore_reward_weight: float = 0.5
+    explore_reward_weight: float = 0.3
     max_steps: int = 500
     use_proper_time_limits: bool = True
 
@@ -64,11 +64,8 @@ class Config:
     min_eta: float = 0.01
     eta: float = 0.2 * 1
     beta: float = 0.2
-    k: float = 1
-    lambda_: float = 0.3
-    mu_decay_steps: float = 1e5
     max_grad_norm: float = 0.5
-    max_frames: int = 1e6
+    max_frames: int = int(1e6)
     num_steps: int = 5  # number of forward steps in A2C
 
     initial_interval: int = 1

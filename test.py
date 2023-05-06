@@ -55,7 +55,7 @@ def main():
     print_line(logger, 'test')
 
     tester = Tester(cfg, logger, device)
-    tester.load_data(model_path)
+    # tester.load_data(model_path)
     reward = tester.run(render=render, save_path=image_save_path)
     logger.info("Reward: {:.2f}".format(reward))
 
@@ -68,7 +68,7 @@ def main():
 
 
 if __name__ == "__main__":
-    time_stamp = '2023_04_24_03_24_27'
-    episode = '388000_avg_reward_90.4'
+    time_stamp = '2023_04_30_01_53_44'
+    episode = '518000_avg_reward_86.5'
     mode = "render"  # "fig_saving"
     main()

@@ -31,33 +31,50 @@ class Policy(nn.Module):
             base = MLPBase
         else:
             raise NotImplementedError
-        self.base = base(cfg, cfg.recurrent)
+        self.base = base(cfg, cfg.recurrent, num_outputs)
         hidden_size = cfg.hidden_size
         for module in reversed(list(self.base.fc_c.modules())):
             if "Linear" in str(module.__class__):
                 hidden_size = module.out_features
                 break
         if self.cfg.noise:
-            self.actor_linear = nn.Sequential(
-                # NoisyLinear(hidden_size, hidden_size, sigma_init=cfg.sigma_init),
-                # nn.ReLU(),
-                NoisyLinear(hidden_size, num_outputs, sigma_init=cfg.sigma_init),
-                nn.Softmax(dim=1),
+            if cfg.task == "online":
+                self.actor_linear = nn.Sequential(
+                    NoisyLinear(hidden_size, hidden_size, sigma_init=cfg.sigma_init),
+                    nn.ReLU(),
+                    NoisyLinear(hidden_size, num_outputs, sigma_init=cfg.sigma_init),
+                    nn.Softmax(dim=1),
+                )
+            else:
+                self.actor_linear = nn.Sequential(
+                    NoisyLinear(hidden_size, num_outputs, sigma_init=cfg.sigma_init),
+                    nn.Softmax(dim=1),
+                )
+        else:
+            if cfg.task == "online":
+                self.actor_linear = nn.Sequential(
+                    nn.Linear(hidden_size, hidden_size),
+                    nn.ReLU(),
+                    nn.Linear(hidden_size, num_outputs),
+                    nn.Softmax(dim=1),
+                )
+            else:
+                self.actor_linear = nn.Sequential(
+                    nn.Linear(hidden_size, num_outputs),
+                    nn.Softmax(dim=1),
+                )
+        if cfg.task == "online":
+            self.critic_linear = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size),
+                nn.ReLU(),
+                nn.Linear(hidden_size, 1),
             )
         else:
-            self.actor_linear = nn.Sequential(
-                # nn.Linear(hidden_size, hidden_size),
-                # nn.ReLU(),
-                nn.Linear(hidden_size, num_outputs),
-                nn.Softmax(dim=1),
+            self.critic_linear = nn.Sequential(
+                nn.Linear(hidden_size, 1),
             )
-        self.critic_linear = nn.Sequential(
-            # nn.Linear(cfg.hidden_size, cfg.hidden_size),
-            # nn.ReLU(),
-            nn.Linear(hidden_size, 1),
-        )
         if cfg.last_n:
-            hold_list = ["actor_module", "critic_module"]
+            hold_list = ["actor_linear", "critic_linear"]
             self._hold_parameter(hold_list)
 
         self.init()
@@ -232,7 +249,7 @@ class CNNBase(NNBase):
 
 
 class MLPBase(NNBase):
-    def __init__(self, cfg, recurrent):
+    def __init__(self, cfg, recurrent, num_outputs):
         super(MLPBase, self).__init__(cfg, recurrent)
         half_hidden_size = int(cfg.hidden_size / 2)
         quad_hidden_size = int(cfg.hidden_size / 4)
@@ -264,13 +281,15 @@ class MLPBase(NNBase):
             )
         elif cfg.task == "online":
             assert cfg.coll_avoid_pretrained_path and cfg.offline_pretrained_path, "Pretrained module not found!"
-            cfg_online = copy.deepcopy(cfg)
-            cfg_online.task = "coll_avoid"
-            self.coll_avoid_module = MLPBase(cfg, cfg.recurrent)
-            load_state_dict(self.coll_avoid_module, cfg.coll_avoid_pretrained_path)
-            cfg_online.task = "offline"
-            self.offline_module = MLPBase(cfg, cfg.recurrent)
-            load_state_dict(self.offline_module, cfg.offline_pretrained_path)
+            cfg_coll, cfg_offline = copy.deepcopy(cfg), copy.deepcopy(cfg)
+            cfg_coll.task = "coll_avoid"
+            cfg_offline.task = "offline"
+            self.coll_avoid_module = MLPBase(cfg_coll, cfg_coll.recurrent, num_outputs)
+            load_state_dict(self.coll_avoid_module, cfg_coll.coll_avoid_pretrained_path)
+            self.offline_module = MLPBase(cfg_offline, cfg_offline.recurrent, num_outputs)
+            load_state_dict(self.offline_module, cfg_offline.offline_pretrained_path)
+            self.coll_avoid_module.requires_grad_(False)
+            self.offline_module.requires_grad_(False)
             self.fc_c = nn.Sequential(
                 nn.Linear(in_features=quad_hidden_size + half_hidden_size, out_features=half_hidden_size),
                 nn.ReLU(),

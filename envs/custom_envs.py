@@ -104,6 +104,7 @@ class CusEnv(gym.Env):
         """
         self.temp_state = {"dis2goal": 0, "dis2coll": 0}
         self.forward = True
+        self.pre_forward = True
 
         self.map_info = {
             "loaded": False,
@@ -236,16 +237,17 @@ class CusEnv(gym.Env):
             assert self.init_state_memory is not None, "Memory not stored!"
             self.position, self.target_position, self.velocity, self.state, self.temp_state, self.map_info = \
                 copy.deepcopy(self.init_state_memory)
-        self.reset_num_count += 1
-        self.step_num = 0
 
-        # if self.cfg.task == "offline":
+        # if self.cfg.task == "offline" or self.cfg.task == "online":
         #     if "test" not in kwargs.keys():
         #         self._init_state_step()
         #         if self.reset_num_count % 100 == 0:
         #             self.logger.info("reset nums: {}, expand: {}/{}".format(self.reset_num_count,
         #                                                                     self.kwargs_memory["position"],
         #                                                                     self.kwargs_memory["target_position"]))
+
+        self.reset_num_count += 1
+        self.step_num = 0
 
         return self._state_integration()
 
@@ -370,15 +372,19 @@ class CusEnv(gym.Env):
 
         if self.cfg.task == "coll_avoid":
             arrive_reward = 0
-            explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
         else:
-            explore_reward = 0
             if self._arrive:
                 arrive_reward = 100
             else:
                 arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
                 # arrive_reward = max(arrive_reward, 0)
                 # arrive_reward = 0
+
+        if self.cfg.task == "offline":
+            forward_reward = -abs(self.state["target_state"][1]) / np.pi * 0.3
+            # forward_reward = 0
+        else:
+            forward_reward = 0
 
         if curr_dis2coll == 0:
             if self.cfg.task == "offline":
@@ -392,10 +398,17 @@ class CusEnv(gym.Env):
             else:
                 collision_reward = 0
 
+        explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
+        # if self.cfg.task == "online":
+        #     if (not self.pre_forward) and (not self.forward):
+        #         explore_reward = -0.5
+        #     self.pre_forward = self.forward
+
+        # time_step_reward = -self.cfg.time_step_reward_weight * self.step_num
         time_step_reward = -self.cfg.time_step_reward_weight
         # time_step_reward = 0
 
-        return arrive_reward + collision_reward + time_step_reward + explore_reward
+        return arrive_reward + collision_reward + time_step_reward + explore_reward + forward_reward
 
     def _state_integration(self, normalize=True):
         distance, theta = self.state["target_state"]
@@ -695,20 +708,31 @@ class CusEnv(gym.Env):
         return [_resolve_coord(x, "x"), _resolve_coord(y, "y")]
 
     def _init_state_step(self):
-        def _expand(s, fix_x=False):
-            steps = (460 - 50) / (1e3 * 5)
+        def _expand(s, fix_x=False, target=False):
+            steps = 350 / 1e4
             x, y = s.split(",")
-            x_max = x.split(":")[-1] if ":" in x else x
-            y_max = y.split(":")[-1] if ":" in y else y
-            next_x_max, next_y_max = str(min(float(x_max) + steps, 460)), str(min(float(y_max) + steps, 460))
-            if fix_x:
-                s = x + "," + y.replace(y_max, next_y_max)
-            else:
-                s = x.replace(x_max, next_x_max) + "," + y.replace(y_max, next_y_max)
+            # x_max = x.split(":")[-1] if ":" in x else x
+            # if target:
+            #     y_ = y.split(":")[0] if ":" in y else y
+            # else:
+            #     y_ = y.split(":")[-1] if ":" in y else y
+            # y_min, y_max = y.split(":")
+            y_ = str(max(float(y) - steps, 50))
+            # next_x_max, next_y_max = str(min(float(x_max) + steps, 450)), str(max(float(y_max) - steps, 50))
+            # next_y_min, next_y_max = str(max(float(y_min) - steps, 50)), str(max(float(y_max) - steps, 150))
+            # next_y = str(max(float(y_) - steps, 50)) if target else str(min(float(y_) + steps, 450))
+            # s = x + "," + y.replace(y_, next_y)
+            # s = x + "," + y.replace(y_min, next_y_min).replace(y_max, next_y_max)
+            s = x + ", " + y_
+            # s = x + "," + y.replace(y_min, next_y_min)
+            # if fix_x:
+            #     s = x + "," + y.replace(y_max, next_y_max)
+            # else:
+            #     s = x.replace(x_max, next_x_max) + "," + y.replace(y_max, next_y_max)
             return s
         assert self.kwargs_memory, "Reset before step!"
-        self.kwargs_memory["position"] = _expand(self.kwargs_memory["position"], fix_x=True)
-        self.kwargs_memory["target_position"] = _expand(self.kwargs_memory["target_position"])
+        # self.kwargs_memory["position"] = _expand(self.kwargs_memory["position"])
+        self.kwargs_memory["target_position"] = _expand(self.kwargs_memory["target_position"], target=True)
 
 
 class MovingColl(object):

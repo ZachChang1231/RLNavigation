@@ -13,16 +13,23 @@ import torch
 
 
 class ActionScheduler(object):
-    def __init__(self, cfg):
+    def __init__(self, cfg, action_num, test=False):
         self.cfg = cfg
-        self.k = cfg.k
-        self.lambda_ = cfg.lambda_
+        self.action_num = action_num
+        self.k = 1
+        self.lambda_ = 6
+        self.mu_decay_steps = 1e6
+        self.eps_decay_steps = 1e6
+        # self.k = cfg.k
+        # self.lambda_ = cfg.lambda_
         self.phi = 1
+        self.eps = 0
+        self.num = 1 if test else cfg.num_processes
 
-    def __call__(self, action_online, action_coll, action_offline, obs):
+    def __call__(self, action_online, action_coll, action_offline, obs, return_risk=False):
         mu = self._eval_risk(obs)
-        action = torch.zeros(self.cfg.num_processes, dtype=torch.long, device=action_online.device)
-        for i in range(self.cfg.num_processes):
+        action = torch.zeros(self.num, dtype=torch.long, device=action_online.device)
+        for i in range(self.num):
             if torch.rand(1) < self.phi:
                 if mu[i] < self.lambda_:
                     # offline
@@ -32,9 +39,16 @@ class ActionScheduler(object):
                     action[i].copy_(action_coll[i, 0])
             else:
                 # online
-                action[i].copy_(action_online[i, 0])
+                if torch.rand(1) < self.eps:
+                    # random
+                    action[i].copy_(torch.randint(self.action_num, (1,)).squeeze())
+                else:
+                    action[i].copy_(action_online[i, 0])
         self._step()
-        return action.unsqueeze(1)
+        if return_risk:
+            return action.unsqueeze(1), mu.item()
+        else:
+            return action.unsqueeze(1)
 
     def _eval_risk(self, obs):
         ot = 1 - obs[:, :self.cfg.laser_num]
@@ -43,7 +57,10 @@ class ActionScheduler(object):
         return mu
 
     def _step(self):
-        self.phi -= 1 / self.cfg.mu_decay_steps
+        self.phi -= 1 / self.mu_decay_steps
+        self.eps -= 1 / self.eps_decay_steps
+        self.phi = max(0.0, self.phi)
+        self.eps = max(0.0, self.eps)
 
 
 def print_line(logger, message):
