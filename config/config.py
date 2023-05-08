@@ -29,7 +29,7 @@ class Config:
     offline_pretrained_path: str = "./result/2023_04_25_14_20_38/checkpoint/156000_avg_reward_122.5/policy.pt"
     seed: int = 9527  # random seed
     task: str = 'online'  # coll_avoid, offline, online
-    num_processes: int = 16  # how many training processes to use
+    num_processes: int = 8  # how many training processes to use
     # assert num_processes <= num_cpu, "The number can't be greater than {}".format(num_cpu)
 
     """ Environment Parameters """
@@ -37,9 +37,9 @@ class Config:
     env_name: str = 'map7'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
-    env_size: str = '500*500'
+    env_size: str = '800*500'
     init_position: str = '50, 200'
-    target_position: str = '450, 200'
+    target_position: str = '700, 150'
     init_velocity: str = '1, 0'
     shape_fixed: bool = True
     turning_angle_num: int = 5

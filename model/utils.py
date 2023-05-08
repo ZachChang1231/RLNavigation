@@ -17,8 +17,8 @@ class ActionScheduler(object):
         self.cfg = cfg
         self.action_num = action_num
         self.k = 1
-        self.lambda_ = 6
-        self.mu_decay_steps = 1e6
+        self.lambda_ = 3.5
+        self.phi_decay_steps = 1e6 * 2
         self.eps_decay_steps = 1e6
         # self.k = cfg.k
         # self.lambda_ = cfg.lambda_
@@ -57,7 +57,7 @@ class ActionScheduler(object):
         return mu
 
     def _step(self):
-        self.phi -= 1 / self.mu_decay_steps
+        self.phi -= 1 / self.phi_decay_steps
         self.eps -= 1 / self.eps_decay_steps
         self.phi = max(0.0, self.phi)
         self.eps = max(0.0, self.eps)

@@ -110,15 +110,24 @@ class Policy(nn.Module):
                     module.remove_noise()
 
     def _hold_parameter(self, hold_list):
+        hold_names = []
         for sequence in hold_list:
             module_list = []
             for name, para in self.named_parameters():
                 if sequence in name:
                     module_list.append(name.split('.')[1])
             module_list = sorted([int(layer) for layer in list(set(module_list))])[::-1]
+            assert len(module_list) >= self.cfg.last_n, "Do not have enough layers to hold!"
             for name, para in self.named_parameters():
-                if not "{}.{}".format(sequence, module_list[self.cfg.last_n - 1]) in name:
-                    para.requires_grad = False
+                for layer in range(1, self.cfg.last_n + 1):
+                    if "{}.{}".format(sequence, module_list[layer - 1]) in name:
+                        if name not in hold_names:
+                            hold_names.append(name)
+        for name, para in self.named_parameters():
+            if name in hold_names:
+                para.requires_grad = True
+            else:
+                para.requires_grad = False
 
     @property
     def recurrent_hidden_state_size(self):

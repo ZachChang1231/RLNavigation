@@ -376,9 +376,9 @@ class CusEnv(gym.Env):
             if self._arrive:
                 arrive_reward = 100
             else:
-                arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
+                # arrive_reward = (pre_dis2goal - curr_dis2goal) * self.cfg.arrive_reward_weight
                 # arrive_reward = max(arrive_reward, 0)
-                # arrive_reward = 0
+                arrive_reward = 0
 
         if self.cfg.task == "offline":
             forward_reward = -abs(self.state["target_state"][1]) / np.pi * 0.3
@@ -398,7 +398,8 @@ class CusEnv(gym.Env):
             else:
                 collision_reward = 0
 
-        explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
+        # explore_reward = -self.cfg.explore_reward_weight if not self.forward else 0
+        explore_reward = 0
         # if self.cfg.task == "online":
         #     if (not self.pre_forward) and (not self.forward):
         #         explore_reward = -0.5
