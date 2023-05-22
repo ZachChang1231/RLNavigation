@@ -242,9 +242,9 @@ class CusEnv(gym.Env):
         #     if "test" not in kwargs.keys():
         #         self._init_state_step()
         #         if self.reset_num_count % 100 == 0:
-        #             self.logger.info("reset nums: {}, expand: {}/{}".format(self.reset_num_count,
-        #                                                                     self.kwargs_memory["position"],
-        #                                                                     self.kwargs_memory["target_position"]))
+        #             self.logger.info("reset nums: {}, expand: [{}]/[{}]".format(self.reset_num_count,
+        #                                                                         self.kwargs_memory["position"],
+        #                                                                         self.kwargs_memory["target_position"]))
 
         self.reset_num_count += 1
         self.step_num = 0
@@ -710,29 +710,34 @@ class CusEnv(gym.Env):
 
     def _init_state_step(self):
         def _expand(s, fix_x=False, target=False):
-            steps = 350 / 1e4
+            steps = 100 / 1e4
             x, y = s.split(",")
             # x_max = x.split(":")[-1] if ":" in x else x
-            # if target:
+            if target:
+                x = str(min(float(x) + steps, 550))
+            else:
+                y = str(min(float(y) + steps, 300))
             #     y_ = y.split(":")[0] if ":" in y else y
             # else:
             #     y_ = y.split(":")[-1] if ":" in y else y
             # y_min, y_max = y.split(":")
-            y_ = str(max(float(y) - steps, 50))
+            # y = str(min(float(y) + steps, 300))
+            # x_ = str(min(float(x_max) + steps, 550))
             # next_x_max, next_y_max = str(min(float(x_max) + steps, 450)), str(max(float(y_max) - steps, 50))
-            # next_y_min, next_y_max = str(max(float(y_min) - steps, 50)), str(max(float(y_max) - steps, 150))
-            # next_y = str(max(float(y_) - steps, 50)) if target else str(min(float(y_) + steps, 450))
+            # next_y_min, next_y_max = str(max(float(y_min) - steps, 100)), str(max(float(y_max) - steps, 150))
+            # next_y = str(max(float(y_) - steps, 100)) if target else str(min(float(y_) + steps, 400))
+            # s = x.replace(x_max, x_) + "," + y
             # s = x + "," + y.replace(y_, next_y)
             # s = x + "," + y.replace(y_min, next_y_min).replace(y_max, next_y_max)
-            s = x + ", " + y_
-            # s = x + "," + y.replace(y_min, next_y_min)
+            s = x + "," + y
+            # s = x + ", " + y.replace(y_min, next_y_min)
             # if fix_x:
             #     s = x + "," + y.replace(y_max, next_y_max)
             # else:
             #     s = x.replace(x_max, next_x_max) + "," + y.replace(y_max, next_y_max)
             return s
         assert self.kwargs_memory, "Reset before step!"
-        # self.kwargs_memory["position"] = _expand(self.kwargs_memory["position"])
+        self.kwargs_memory["position"] = _expand(self.kwargs_memory["position"])
         self.kwargs_memory["target_position"] = _expand(self.kwargs_memory["target_position"], target=True)
 
 

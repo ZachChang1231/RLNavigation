@@ -40,8 +40,8 @@ class Policy(nn.Module):
         if self.cfg.noise:
             if cfg.task == "online":
                 self.actor_linear = nn.Sequential(
-                    NoisyLinear(hidden_size, hidden_size, sigma_init=cfg.sigma_init),
-                    nn.ReLU(),
+                    # NoisyLinear(hidden_size, hidden_size, sigma_init=cfg.sigma_init),
+                    # nn.ReLU(),
                     NoisyLinear(hidden_size, num_outputs, sigma_init=cfg.sigma_init),
                     nn.Softmax(dim=1),
                 )
@@ -53,8 +53,8 @@ class Policy(nn.Module):
         else:
             if cfg.task == "online":
                 self.actor_linear = nn.Sequential(
-                    nn.Linear(hidden_size, hidden_size),
-                    nn.ReLU(),
+                    # nn.Linear(hidden_size, hidden_size),
+                    # nn.ReLU(),
                     nn.Linear(hidden_size, num_outputs),
                     nn.Softmax(dim=1),
                 )
@@ -65,8 +65,8 @@ class Policy(nn.Module):
                 )
         if cfg.task == "online":
             self.critic_linear = nn.Sequential(
-                nn.Linear(hidden_size, hidden_size),
-                nn.ReLU(),
+                # nn.Linear(hidden_size, hidden_size),
+                # nn.ReLU(),
                 nn.Linear(hidden_size, 1),
             )
         else:
@@ -95,7 +95,7 @@ class Policy(nn.Module):
         action_log_probs = dist.log_probs(action)
         dist_entropy = dist.entropy().mean()
 
-        return value, action_log_probs, dist_entropy, hns
+        return value, probs, action_log_probs, dist_entropy, hns
 
     def reset_noise(self):
         if self.cfg.noise:

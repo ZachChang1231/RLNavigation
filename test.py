@@ -49,13 +49,19 @@ def main():
     # np.random.seed(2)
     # torch.manual_seed(cfg.seed)
 
+    cfg.task = 'online'
+    cfg.env_name = 'map6'
+    cfg.env_size = '500*500'
+    cfg.init_position = '50, 450'
+    cfg.target_position = '450, 450'
+
     logging.basicConfig(level=logging.INFO, filemode='w')
     logger = logging.getLogger(__name__)
 
     print_line(logger, 'test')
 
     tester = Tester(cfg, logger, device)
-    # tester.load_data(model_path)
+    tester.load_data(model_path)
     reward = tester.run(render=render, save_path=image_save_path)
     logger.info("Reward: {:.2f}".format(reward))
 
@@ -68,7 +74,7 @@ def main():
 
 
 if __name__ == "__main__":
-    time_stamp = '2023_04_30_01_53_44'
-    episode = '518000_avg_reward_86.5'
+    time_stamp = 'map7_1'
+    episode = '16000_avg_reward_84.0'
     mode = "render"  # "fig_saving"
     main()

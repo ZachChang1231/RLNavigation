@@ -37,8 +37,10 @@ class RolloutStorage(object):
         self.bad_masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
         self.done_masks = torch.ones(cfg.num_steps + 1, cfg.num_processes, 1)
 
+        self.action_pretrained_oh = torch.zeros(cfg.num_steps, cfg.num_processes, num_outputs)
+
         self.register = ["obs", "recurrent_hidden_states", "rewards", "value_preds", "returns", "action_log_probs",
-                         "actions", "actions_onehot", "masks", "bad_masks", "done_masks"]
+                         "actions", "actions_onehot", "masks", "bad_masks", "done_masks", "action_pretrained_oh"]
         self.num_steps = cfg.num_steps
         self.step = 0
 
@@ -54,6 +56,8 @@ class RolloutStorage(object):
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
         self.done_masks = self.done_masks.to(device)
+
+        self.action_pretrained_oh = self.action_pretrained_oh.to(device)
 
     def insert(self, dic):
         for key, value in dic.items():
@@ -92,9 +96,9 @@ class RolloutStorage(object):
 
 class DataWriter(object):
     def __init__(self):
-        self.max_len = cfg.num_steps * max(cfg.save_interval, cfg.eval_interval, cfg.log_interval) * 2
+        self.max_len = int(cfg.num_steps * max(cfg.save_interval, cfg.eval_interval, cfg.log_interval) * 1.2)
         mapping_keys = ["total_reward", "extrinsic_reward", "intrinsic_reward", "eval_reward", "actor_loss",
-                        "critic_loss", "dist_entropy", "curiosity_loss"]
+                        "critic_loss", "dist_entropy", "curiosity_loss", "imitate_loss"]
         self.mapping = dict()
         for key in mapping_keys:
             self.mapping[key] = deque(maxlen=self.max_len)

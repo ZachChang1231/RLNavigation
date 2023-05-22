@@ -24,10 +24,12 @@ class A2CAgent(object):
         self.icm = icm
         self.fwd_criterion = nn.MSELoss(reduction="none")
         self.inv_criterion = nn.CrossEntropyLoss(reduction="none")
+        self.cross_entropy = nn.CrossEntropyLoss()
         para = [{'params': base_params}, {'params': model.critic_linear.parameters(), 'lr': self.lr * 5}]
         if icm:
             para += [{'params': self.icm.parameters(), 'lr': self.lr * 1}]
         self.optimizer = optim.Adam(para, lr=self.lr)
+        self.w = 1
         # self.optimizer = optim.RMSprop(
         #     self.model.parameters(), lr=cfg.lr, eps=1e-5, alpha=0.99)
         # self.scheduler = StepLR(self.optimizer, step_size=200000, gamma=0.1)
@@ -37,7 +39,7 @@ class A2CAgent(object):
         action_shape = rollout.actions.size()[-1]
         num_steps, num_processes, _ = rollout.rewards.size()
 
-        values, action_log_probs, dist_entropy, _ = self.model.evaluate_actions(
+        values, probs, action_log_probs, dist_entropy, _ = self.model.evaluate_actions(
             rollout.obs[:-1].view(-1, *obs_shape),
             rollout.recurrent_hidden_states[0].view(
                 -1, self.model.recurrent_hidden_state_size),
@@ -46,6 +48,7 @@ class A2CAgent(object):
 
         values = values.view(num_steps, num_processes, 1)
         action_log_probs = action_log_probs.view(num_steps, num_processes, 1)
+        probs = probs.view(num_steps, num_processes, -1)
 
         advantages = rollout.returns[:-1] - values
         value_loss = advantages.pow(2).mean()
@@ -53,6 +56,14 @@ class A2CAgent(object):
         action_loss = -(advantages.detach() * action_log_probs).mean()
 
         loss = value_loss * self.cfg.value_loss_coef + action_loss - dist_entropy * self.cfg.entropy_coef
+
+        if self.cfg.imitate:
+            imitate_loss = (self.cross_entropy(probs.transpose(1, 2),
+                                               rollout.action_pretrained_oh.transpose(1, 2).float())).mean()
+            loss = loss * (1 - self.w) + imitate_loss * self.w
+            self.w = max(0.0, self.w - 1/1e5)
+        else:
+            self.w = 0
 
         curiosity_loss = None
         if self.cfg.icm:

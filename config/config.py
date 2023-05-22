@@ -24,22 +24,22 @@ class Config:
     save_path: str = ''  # save path
     model_path: str = ''
     map_path: str = './envs/maps'
-    pretrained_path: str = ""  # load from pretrained file
-    coll_avoid_pretrained_path: str = "./result/2023_04_25_18_04_50/checkpoint/92000_avg_reward_368.3/policy.pt"
-    offline_pretrained_path: str = "./result/2023_04_25_14_20_38/checkpoint/156000_avg_reward_122.5/policy.pt"
+    pretrained_path: str = "./result/2023_05_18_02_24_29/checkpoint/16000_avg_reward_84.0"  # load from pretrained file
+    coll_avoid_pretrained_path: str = "./result/coll_avoid/checkpoint/92000_avg_reward_368.3/policy.pt"
+    offline_pretrained_path: str = "./result/offline/checkpoint/156000_avg_reward_122.5/policy.pt"
     seed: int = 9527  # random seed
     task: str = 'online'  # coll_avoid, offline, online
-    num_processes: int = 8  # how many training processes to use
+    num_processes: int = 16  # how many training processes to use
     # assert num_processes <= num_cpu, "The number can't be greater than {}".format(num_cpu)
 
     """ Environment Parameters """
     map_type: str = 'from_image'  # 'from_image', 'human'
-    env_name: str = 'map7'   # environment to train on
+    env_name: str = 'map6'   # environment to train on
     render: bool = False
     robot_size: float = 5  # 0.5
-    env_size: str = '800*500'
-    init_position: str = '50, 200'
-    target_position: str = '700, 150'
+    env_size: str = '600*500'
+    init_position: str = '50, 400'
+    target_position: str = '550, 175'
     init_velocity: str = '1, 0'
     shape_fixed: bool = True
     turning_angle_num: int = 5
@@ -55,8 +55,9 @@ class Config:
     use_proper_time_limits: bool = True
 
     """ Training Parameters """
+    imitate: bool = False
     use_cuda: bool = True  # use gpu
-    lr: float = 1e-4  # learning rate
+    lr: float = 1e-5  # learning rate
     entropy_coef: float = 0.01  # entropy term coefficient
     value_loss_coef: float = 0.5  # value loss coefficient
     gamma: float = 0.99  # discount factor for rewards
@@ -69,7 +70,7 @@ class Config:
     num_steps: int = 5  # number of forward steps in A2C
 
     initial_interval: int = 1
-    save_interval: int = 2000  # save interval, one save per n updates
+    save_interval: int = 10000  # save interval, one save per n updates
     eval_interval: int = 2000  # eval interval, one eval per n updates
     eval_num: int = 10
     log_interval: int = 200  # log interval, one log per n updates

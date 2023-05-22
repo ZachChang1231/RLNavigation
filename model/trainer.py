@@ -140,7 +140,13 @@ class Trainer(A2CModel):
                         action_offline = dist_offline.mode()
                 action = dist.sample()
                 if self.cfg.task == "online":
-                    action = self.action_scheduler(action, action_coll, action_offline, self.rollout.obs[step])
+                    action, action_pretrained = self.action_scheduler(action, action_coll, action_offline, self.rollout.obs[step])
+                    action_pretrained_oh = F.one_hot(action_pretrained.squeeze(), num_classes=self.num_outputs)
+                    self.rollout.insert(
+                        {
+                            "action_pretrained_oh": action_pretrained_oh
+                        }
+                    )
                 action_log_probs = dist.log_probs(action)
                 action_np = action.cpu().numpy().squeeze()
                 next_state, reward, terminated, truncated, _ = self.envs.step(action_np)
@@ -196,7 +202,7 @@ class Trainer(A2CModel):
                                     "dist_entropy": dist_entropy, "curiosity_loss": curiosity_loss})
 
             if frame_idx == self.cfg.max_frames - 1 and self.cfg.model_path != "":
-                # if save_iter >= self.cfg.save_interval and self.cfg.model_path != "":
+            # if save_iter >= self.cfg.save_interval and self.cfg.model_path != "":
                 mean_r, _, _, _ = self.datawriter.get_episode_reward(self.cfg.save_interval)
                 self.save_data("{}_avg_reward_{:.1f}".format(frame_idx, mean_r))
                 save_iter = 0
@@ -225,11 +231,12 @@ class Trainer(A2CModel):
                                                                                        extrinsic_reward,
                                                                                        max_in_r,
                                                                                        self.eta))
-                if self.cfg.task == "online":
-                    self.logger.info("phi: {:.2f}, eps: {:.2f}".format(
-                        self.action_scheduler.phi,
-                        self.action_scheduler.eps)
-                    )
+                # if self.cfg.task == "online":
+                #     self.logger.info("phi: {:.2f}, eps: {:.2f}, w: {:.2f}".format(
+                #         self.action_scheduler.phi,
+                #         self.action_scheduler.eps,
+                #         self.agent.w)
+                #     )
 
             if self.cfg.eval_interval is not None and frame_idx % self.cfg.eval_interval == 0:
 
@@ -269,8 +276,8 @@ class Tester(A2CModel):
             velocity=self.cfg.init_velocity
         )
         # state = self.env.reset(
-        #     position="50, 200",
-        #     target_position="750, 250",
+        #     position="50, 175",
+        #     target_position="550, 175",
         #     velocity=self.cfg.init_velocity,
         #     test=True
         # )
@@ -288,18 +295,18 @@ class Tester(A2CModel):
                 dist, _, _ = self.model(state, hn, mask)
             action = dist.mode()
 
-            # action_scheduler = ActionScheduler(self.cfg, self.num_outputs, True)
-            # with torch.no_grad():
-            #     dist, value, hns = self.model(state, hn, mask)
-            #     if self.cfg.task == "online":
-            #         dist_coll, _, _ = self.coll_module(state, hn, mask)
-            #         action_coll = dist_coll.mode()
-            #         dist_offline, _, _ = self.offline_module(state, hn, mask)
-            #         action_offline = dist_offline.mode()
-            # action = dist.sample()
-            # if self.cfg.task == "online":
-            #     action, risk = action_scheduler(action, action_coll, action_offline, state, True)
-            #     message["risk"] = risk
+            action_scheduler = ActionScheduler(self.cfg, self.num_outputs, True)
+            with torch.no_grad():
+                dist, value, hns = self.model(state, hn, mask)
+                if self.cfg.task == "online":
+                    dist_coll, _, _ = self.coll_module(state, hn, mask)
+                    action_coll = dist_coll.mode()
+                    dist_offline, _, _ = self.offline_module(state, hn, mask)
+                    action_offline = dist_offline.mode()
+            action = dist.sample()
+            if self.cfg.task == "online":
+                action, _, risk = action_scheduler(action, action_coll, action_offline, state, True)
+                message["risk"] = risk
 
             action_oh = F.one_hot(action[0], num_classes=self.num_outputs)
             next_state, reward, terminated, truncated, _ = self.env.step(action.cpu().numpy()[0, 0])

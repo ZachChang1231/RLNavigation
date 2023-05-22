@@ -17,8 +17,8 @@ class ActionScheduler(object):
         self.cfg = cfg
         self.action_num = action_num
         self.k = 1
-        self.lambda_ = 3.5
-        self.phi_decay_steps = 1e6 * 2
+        self.lambda_ = 3
+        self.phi_decay_steps = 1e6
         self.eps_decay_steps = 1e6
         # self.k = cfg.k
         # self.lambda_ = cfg.lambda_
@@ -29,7 +29,16 @@ class ActionScheduler(object):
     def __call__(self, action_online, action_coll, action_offline, obs, return_risk=False):
         mu = self._eval_risk(obs)
         action = torch.zeros(self.num, dtype=torch.long, device=action_online.device)
+        action_pretrained = torch.zeros(self.num, dtype=torch.long, device=action_online.device)
         for i in range(self.num):
+
+            if mu[i] < self.lambda_:
+                # offline
+                action_pretrained[i].copy_(action_offline[i, 0])
+            else:
+                # avoid
+                action_pretrained[i].copy_(action_coll[i, 0])
+
             if torch.rand(1) < self.phi:
                 if mu[i] < self.lambda_:
                     # offline
@@ -46,9 +55,9 @@ class ActionScheduler(object):
                     action[i].copy_(action_online[i, 0])
         self._step()
         if return_risk:
-            return action.unsqueeze(1), mu.item()
+            return action.unsqueeze(1), action_pretrained.unsqueeze(1), mu.item()
         else:
-            return action.unsqueeze(1)
+            return action.unsqueeze(1), action_pretrained.unsqueeze(1)
 
     def _eval_risk(self, obs):
         ot = 1 - obs[:, :self.cfg.laser_num]
